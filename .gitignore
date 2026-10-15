@@ -1,0 +1,5 @@
+/build*/
+/data/
+/config/server.json
+/.env
+/compile_commands.json
