@@ -12,14 +12,18 @@ Application features have not been implemented yet.
 ## Project Layout
 
 ```text
-cmake/       Third-party dependency configuration
-src/         Server source code
-client/      Command-line client source code
-common/      Protocol code shared by the server and client
-tests/       Catch2 tests
-config/      Example configuration files
-sql/         Database schema scripts
-docs/        Design and usage documentation
+server/
+    CMakeLists.txt   Server build configuration
+    src/            Server source code
+client/
+    CMakeLists.txt   Client build configuration
+    src/            Command-line client source code
+common/             Protocol code shared by the server and client
+tests/              Catch2 tests
+cmake/              Shared third-party dependency configuration
+config/             Example configuration files
+sql/                Database schema scripts
+docs/               Design and usage documentation
 ```
 
 See [Architecture](docs/architecture.md) for the design and project conventions.
@@ -42,7 +46,7 @@ As source files are added, list them explicitly in the corresponding
 
 | Target | Source List | Description |
 | --- | --- | --- |
-| `chatroom_server` | `SERVER_SOURCES` in `src/CMakeLists.txt` | Server |
+| `chatroom_server` | `SERVER_SOURCES` in `server/CMakeLists.txt` | Server |
 | `chatroom_client` | `CLIENT_SOURCES` in `client/CMakeLists.txt` | Command-line client |
 | `chatroom_tests` | `TEST_SOURCES` in `tests/CMakeLists.txt` | Catch2 tests, automatically registered with CTest |
 
@@ -52,6 +56,21 @@ To build without tests or the Catch2 dependency:
 cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 cmake --build build-release -j2
 ```
+
+To configure only the server or only the client, with tests disabled:
+
+```bash
+cmake -S . -B build-server -DBUILD_CLIENT=OFF -DBUILD_TESTING=OFF
+cmake --build build-server -j2
+
+cmake -S . -B build-client -DBUILD_SERVER=OFF -DBUILD_TESTING=OFF
+cmake --build build-client -j2
+```
+
+The server and client produce separate executables and communicate over the
+network. Shared code is limited to protocol utilities. Each component's
+dependencies belong in its own `CMakeLists.txt`; shared dependencies belong in
+`cmake/Dependencies.cmake`.
 
 Dependencies for HTTP, JWT, MySQL, and password hashing will be added as their
 modules are implemented.

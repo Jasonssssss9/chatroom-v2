@@ -10,6 +10,11 @@
 - Run the HTTP API and TCP chat service in a single process.
 - Keep the server and command-line client in the same repository and build them
   as separate executables.
+- Keep their implementations in `server/src/` and `client/src/`. Shared code in
+  `common/` is limited to protocol utilities; neither component links to the
+  other's implementation.
+- Configure component-specific dependencies in each component's `CMakeLists.txt`.
+  Use `BUILD_SERVER` and `BUILD_CLIENT` to select which components to build.
 
 ## Responsibilities
 

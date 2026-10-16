@@ -1,11 +1,12 @@
 # List client source files explicitly as they are added.
 set(CLIENT_SOURCES
-    # main.cpp
+    # src/main.cpp
 )
 
 if(CLIENT_SOURCES)
     add_executable(chatroom_client ${CLIENT_SOURCES})
     target_include_directories(chatroom_client PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${PROJECT_SOURCE_DIR}/common
     )
     target_link_libraries(chatroom_client PRIVATE

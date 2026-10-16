@@ -6,12 +6,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+option(BUILD_SERVER "Build the chat server" ON)
+option(BUILD_CLIENT "Build the command-line client" ON)
+
 find_package(Threads REQUIRED)
 include(CTest)
 include(cmake/Dependencies.cmake)
 
-add_subdirectory(src)
-add_subdirectory(client)
+if(BUILD_SERVER)
+    add_subdirectory(server)
+endif()
+
+if(BUILD_CLIENT)
+    add_subdirectory(client)
+endif()
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
