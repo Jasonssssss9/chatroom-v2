@@ -10,6 +10,8 @@
 | `FrameDecoder` | Extracts length-prefixed payloads while retaining incomplete input |
 | `TcpConnection` | Owns one client's socket, input decoder, and buffered output |
 | `TcpServer` | Runs the Reactor, manages connections, and invokes application callbacks |
+| `TcpClient` | Owns one blocking IPv4 connection and sends or receives complete frames |
+| `ConsoleClient` | Coordinates terminal input, reply display, and receiver thread shutdown |
 
 The implementation uses Linux socket APIs directly. Server sockets are non-blocking
 and close on exec. ET handlers accept, read, or write until `EAGAIN`; `EINTR` retries
@@ -60,6 +62,27 @@ once. Stop producers and join the loop thread before destroying the server.
 `stop()` is not a signal-handler API; the echo executable currently uses normal
 process termination for Ctrl+C.
 
+## Client Networking
+
+`TcpClient` connects in its constructor. One thread may call `send()` while another
+calls `receive()`. Multiple concurrent senders or receivers are not supported.
+The library handles framing without interpreting JSON. It retries interrupted I/O,
+completes partial writes, and retains incomplete or consecutive replies. A clean
+EOF returns no message; EOF in the middle of a frame reports an error.
+
+`finish_sending()` sends FIN while keeping the receive direction open. `disconnect()`
+uses `shutdown(SHUT_RDWR)` to cancel blocked I/O without closing a descriptor that
+another thread is using. Join I/O threads before destroying the client. Create a
+new instance to reconnect. Connection establishment is blocking and uses the
+operating system's timeout; hostnames and automatic reconnect are not implemented.
+
+The console validates each input line as JSON, then sends it. A receive thread
+prints replies and signals an eventfd when it finishes. The input thread polls
+standard input and that eventfd, so remote disconnects also wake terminal input.
+Output is serialized with a mutex. `/quit` cancels I/O immediately; standard-input
+EOF finishes sending and waits for the peer to close after its final replies.
+Ctrl+C uses normal process termination.
+
 ## Tests
 
 Catch2 tests use local TCP connections and socket pairs. They cover partial frames,
@@ -67,3 +90,7 @@ consecutive messages, UTF-8 byte lengths, embedded zero bytes, frame limits, par
 writes, output limits, disconnected peers, half-close handling, stale replies,
 cross-thread sends, and loop shutdown. Integration tests bind to port `0` and use
 socket timeouts and futures rather than timing sleeps.
+
+Client tests use a raw TCP peer and can run with `BUILD_SERVER=OFF`. They cover
+framed sends, fragmented and consecutive replies, truncated or oversized frames,
+send limits, final replies after FIN, cancellation, and connection failures.

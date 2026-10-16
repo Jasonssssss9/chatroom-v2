@@ -21,6 +21,7 @@ public:
 
     // Returns no value until a frame is complete. Rejects oversized lengths.
     std::optional<std::string> next();
+    bool empty() const noexcept { return buffer_.size() == offset_; }
 
 private:
     std::string buffer_;

@@ -7,5 +7,10 @@ if(BUILD_SERVER)
     target_link_libraries(chatroom_tests PRIVATE chatroom_net)
 endif()
 
+if(BUILD_CLIENT)
+    target_sources(chatroom_tests PRIVATE tcp_client_test.cpp)
+    target_link_libraries(chatroom_tests PRIVATE chatroom_client_net Threads::Threads)
+endif()
+
 include(Catch)
 catch_discover_tests(chatroom_tests PROPERTIES TIMEOUT 15)

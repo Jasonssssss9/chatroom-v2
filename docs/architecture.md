@@ -37,7 +37,9 @@ discard duplicates using message IDs. Unacknowledged messages can be delivered a
 The server network layer implements non-blocking IPv4 TCP, an epoll ET Reactor,
 message framing, buffered writes, and cross-thread sends through an eventfd-backed
 queue. The executable currently provides JSON echo behavior. Catch2 covers framing,
-connection I/O, and TCP integration. See [Networking](networking.md).
+connection I/O, and TCP integration. The command-line client uses a blocking TCP
+connection with separate input and receive threads. Its library and tests can be
+built without the server. See [Networking](networking.md).
 
-HTTP, JWT, MySQL, password hashing, and the command-line client have not been
+HTTP, JWT, MySQL, and password hashing have not been
 implemented yet. Their dependencies will be added as needed.
