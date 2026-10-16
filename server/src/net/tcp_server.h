@@ -1,0 +1,62 @@
+#pragma once
+
+#include "net/epoll.h"
+#include "net/tcp_connection.h"
+
+#include <atomic>
+#include <functional>
+#include <mutex>
+#include <queue>
+#include <unordered_map>
+
+namespace chatroom {
+
+// Single-threaded TCP Reactor. Callbacks run on the thread executing run().
+// Configure handlers before run(); only send() and stop() may be called concurrently.
+// Run once, then join the loop and all producers before destroying the server.
+class TcpServer {
+public:
+    using MessageHandler = std::function<void(ConnectionId, std::string)>;
+    using DisconnectHandler = std::function<void(ConnectionId)>;
+
+    explicit TcpServer(std::uint16_t port = 8081, const std::string& address = "127.0.0.1");
+
+    void set_message_handler(MessageHandler handler);
+    void set_disconnect_handler(DisconnectHandler handler);
+    std::uint16_t port() const { return listener_.local_port(); }
+
+    void run();
+
+    // Queues a framed payload for the loop. Results for closed connections are discarded.
+    void send(ConnectionId id, std::string_view payload);
+
+    // Wakes the loop and stops it without draining pending output.
+    void stop();
+
+private:
+    struct PendingSend {
+        ConnectionId id;
+        std::string frame;
+    };
+
+    void notify();
+    void accept_connections();
+    void process_sends();
+    void handle_event(ConnectionId id, std::uint32_t events);
+    void update_connection(ConnectionId id);
+    void close_connection(ConnectionId id);
+
+    Socket listener_;
+    Epoll epoll_;
+    UniqueFd wakeup_fd_;
+    std::unordered_map<ConnectionId, TcpConnection> connections_;
+    ConnectionId next_id_ = 2;
+    MessageHandler on_message_;
+    DisconnectHandler on_disconnect_;
+
+    std::atomic<bool> stopped_{false};
+    std::mutex sends_mutex_;
+    std::queue<PendingSend> pending_sends_;
+};
+
+} // namespace chatroom

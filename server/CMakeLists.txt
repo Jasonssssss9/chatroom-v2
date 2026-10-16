@@ -1,17 +1,14 @@
-# List server source files explicitly as they are added.
-set(SERVER_SOURCES
-    # src/main.cpp
+add_library(chatroom_net
+    src/net/socket.cpp
+    src/net/epoll.cpp
+    src/net/tcp_connection.cpp
+    src/net/tcp_server.cpp
 )
+target_include_directories(chatroom_net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(chatroom_net PUBLIC chatroom_common Threads::Threads)
+target_compile_definitions(chatroom_net PRIVATE _GNU_SOURCE)
+target_compile_options(chatroom_net PRIVATE -Wall -Wextra -Wpedantic)
 
-if(SERVER_SOURCES)
-    add_executable(chatroom_server ${SERVER_SOURCES})
-    target_include_directories(chatroom_server PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${PROJECT_SOURCE_DIR}/common
-    )
-    target_link_libraries(chatroom_server PRIVATE
-        Threads::Threads
-        nlohmann_json::nlohmann_json
-    )
-    target_compile_options(chatroom_server PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+add_executable(chatroom_server src/main.cpp)
+target_link_libraries(chatroom_server PRIVATE chatroom_net nlohmann_json::nlohmann_json)
+target_compile_options(chatroom_server PRIVATE -Wall -Wextra -Wpedantic)

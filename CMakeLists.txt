@@ -13,6 +13,8 @@ find_package(Threads REQUIRED)
 include(CTest)
 include(cmake/Dependencies.cmake)
 
+add_subdirectory(common)
+
 if(BUILD_SERVER)
     add_subdirectory(server)
 endif()

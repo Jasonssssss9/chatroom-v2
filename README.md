@@ -6,8 +6,8 @@ The planned server uses non-blocking TCP, epoll, and the Reactor pattern for rea
 chat, HTTP and JWT for authentication, and MySQL for users, groups, and messages.
 Uploaded files are stored on disk, with their metadata in MySQL.
 
-The project currently contains the directory structure and CMake configuration.
-Application features have not been implemented yet.
+The server network layer is implemented. The executable currently echoes framed
+JSON messages; authentication, chat features, and database access are still planned.
 
 ## Project Layout
 
@@ -18,7 +18,7 @@ server/
 client/
     CMakeLists.txt   Client build configuration
     src/            Command-line client source code
-common/             Protocol code shared by the server and client
+common/             Message framing and file descriptor ownership
 tests/              Catch2 tests
 cmake/              Shared third-party dependency configuration
 config/             Example configuration files
@@ -26,7 +26,8 @@ sql/                Database schema scripts
 docs/               Design and usage documentation
 ```
 
-See [Architecture](docs/architecture.md) for the design and project conventions.
+See [Architecture](docs/architecture.md) for the design and project conventions,
+and [Networking](docs/networking.md) for the current network API and behavior.
 
 ## Building
 
@@ -40,15 +41,17 @@ cmake --build build -j2
 ctest --test-dir build --output-on-failure
 ```
 
-The source lists are currently empty, so no executables or tests are generated.
-As source files are added, list them explicitly in the corresponding
-`CMakeLists.txt` to enable these targets:
+The build provides these targets:
 
-| Target | Source List | Description |
+| Target | Configuration | Description |
 | --- | --- | --- |
-| `chatroom_server` | `SERVER_SOURCES` in `server/CMakeLists.txt` | Server |
-| `chatroom_client` | `CLIENT_SOURCES` in `client/CMakeLists.txt` | Command-line client |
-| `chatroom_tests` | `TEST_SOURCES` in `tests/CMakeLists.txt` | Catch2 tests, automatically registered with CTest |
+| `chatroom_common` | `common/CMakeLists.txt` | Shared framing library |
+| `chatroom_net` | `server/CMakeLists.txt` | Server network library |
+| `chatroom_server` | `server/CMakeLists.txt` | JSON echo server |
+| `chatroom_tests` | `tests/CMakeLists.txt` | Catch2 tests, automatically registered with CTest |
+
+The command-line client has not been implemented yet. Its build configuration
+remains in `client/CMakeLists.txt`.
 
 To build without tests or the Catch2 dependency:
 
@@ -67,10 +70,31 @@ cmake -S . -B build-client -DBUILD_SERVER=OFF -DBUILD_TESTING=OFF
 cmake --build build-client -j2
 ```
 
-The server and client produce separate executables and communicate over the
-network. Shared code is limited to protocol utilities. Each component's
+The server and client will run as separate executables and communicate over the
+network. Shared code contains framing and small resource utilities. Each component's
 dependencies belong in its own `CMakeLists.txt`; shared dependencies belong in
 `cmake/Dependencies.cmake`.
 
 Dependencies for HTTP, JWT, MySQL, and password hashing will be added as their
 modules are implemented.
+
+## Running the Server
+
+```bash
+./build/server/chatroom_server
+./build/server/chatroom_server 8081 0.0.0.0
+```
+
+The default address is `127.0.0.1:8081`. Port `0` lets the operating system choose
+an available port, which is printed at startup. Use Ctrl+C to terminate the demo.
+
+Each request is a four-byte unsigned payload length in network byte order followed
+by UTF-8 JSON. The server returns the parsed JSON in the same framing format.
+Malformed JSON receives `{"error":"invalid_json"}`; oversized frames close the
+connection. Plain text sent with a terminal tool is not a framed request.
+
+Run all tests with CTest, or select the networking tests directly:
+
+```bash
+./build/tests/chatroom_tests "[server]"
+```
