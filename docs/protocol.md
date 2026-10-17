@@ -233,8 +233,8 @@ responses with a `<` prefix; that prefix is not part of the wire message.
 | `invalid_json` | Malformed JSON or invalid UTF-8 | Kept open |
 | `invalid_request` | Excessive JSON nesting, wrong root, type, metadata, or data type | Kept open |
 | `unknown_action` | Valid envelope with an unsupported action | Kept open |
-| `internal_error` | Unexpected application-handler failure | Kept open |
-| `response_too_large` | Serialized handler response exceeds 65,536 bytes | Kept open |
+| `internal_error` | Unexpected application-handler or response serialization failure | Kept open |
+| `response_too_large` | Serialized response exceeds 65,536 bytes | Kept open |
 
 Envelope validation happens before action dispatch. Within an object, the parser
 checks `type`, `request_id`, `action`, then `data`, and reports the first failing
@@ -242,11 +242,13 @@ rule. Correlation metadata is collected before these checks.
 
 After an error, the next complete frame is a new request and is processed normally.
 Malformed JSON does not corrupt the framing of later requests. A worker replaces
-an oversized handler response with a small `response_too_large` error carrying the
-original request ID and action. The limit applies to serialized JSON bytes,
-including the envelope and escaped characters; exactly 65,536 bytes is allowed.
-Later requests on the connection continue normally. Handlers returning large
-result sets should use pagination rather than truncating JSON.
+an oversized response with a small `response_too_large` error carrying the request
+ID and action. The same check applies to successful responses, returned application
+errors, and responses built from a thrown `ProtocolError`. The limit applies to
+serialized JSON bytes, including the envelope and escaped characters; exactly
+65,536 bytes is allowed. Later requests on the connection continue normally.
+Handlers returning large result sets should use pagination rather than truncating
+JSON.
 
 Transport failures, oversized incoming frames, and output-buffer limits still
 follow the connection-closing rules in [Networking](networking.md).

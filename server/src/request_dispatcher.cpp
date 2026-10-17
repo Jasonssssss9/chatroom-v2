@@ -24,6 +24,17 @@ void log_request_error(ConnectionId id, const Request& request,
     const auto level = code == "internal_error" ? LogLevel::error : LogLevel::warn;
     log(level, "request_error", std::move(context));
 }
+
+// Replace oversized responses before logging or posting them to the Reactor.
+std::string serialize_response(const Request& request, nlohmann::json& response) {
+    auto serialized = response.dump();
+    if (serialized.size() > kMaxFrameSize) {
+        response = make_error_response(request, "response_too_large",
+                                       "Response exceeds the 64 KiB limit");
+        serialized = response.dump();
+    }
+    return serialized;
+}
 } // namespace
 
 RequestDispatcher::RequestDispatcher(TcpServer& server, Handler handler, std::size_t worker_count,
@@ -87,15 +98,15 @@ void RequestDispatcher::start_next(ConnectionId id) {
 std::string RequestDispatcher::process(ConnectionId id, std::string_view payload) const {
     Request request;
     try {
-        request = parse_request(payload);
-        auto response = handler_(id, request);
-        auto serialized = response.dump();
-        // Apply the wire limit on a worker before the result reaches the Reactor.
-        if (serialized.size() > kMaxFrameSize) {
-            response = make_error_response(request, "response_too_large",
-                                           "Response exceeds the 64 KiB limit");
-            serialized = response.dump();
+        nlohmann::json response;
+        try {
+            request = parse_request(payload);
+            response = handler_(id, request);
+        } catch (const ProtocolError& error) {
+            request = error.request;
+            response = make_error_response(request, error.code, error.what());
         }
+        auto serialized = serialize_response(request, response);
         if (!response.value("ok", true)) {
             const auto& error = response.at("error");
             log_request_error(id, request, error.at("code").get<std::string>(),
@@ -104,15 +115,13 @@ std::string RequestDispatcher::process(ConnectionId id, std::string_view payload
             log(LogLevel::debug, "request_completed", request_context(id, request));
         }
         return serialized;
-    } catch (const ProtocolError& error) {
-        log_request_error(id, error.request, error.code, error.what());
-        return make_error_response(error.request, error.code, error.what()).dump();
     } catch (const std::exception& error) {
         log_request_error(id, request, "internal_error", error.what());
     } catch (...) {
         log_request_error(id, request, "internal_error", "Unknown exception");
     }
-    return make_error_response(request, "internal_error", "Request processing failed").dump();
+    auto response = make_error_response(request, "internal_error", "Request processing failed");
+    return serialize_response(request, response);
 }
 
 void RequestDispatcher::complete(ConnectionId id, std::string response) {

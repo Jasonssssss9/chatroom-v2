@@ -922,6 +922,7 @@ TEST_CASE("Excessive JSON nesting does not stall later worker requests",
 TEST_CASE("Oversized worker responses do not interrupt request processing", "[server][dispatcher]") {
     std::string text;
     bool error_response = false;
+    bool throw_error = false;
     SECTION("Large success response") { text.assign(kMaxFrameSize, 'x'); }
     SECTION("Escaping makes the serialized response too large") {
         text.assign(kMaxFrameSize / 2, '\n');
@@ -930,11 +931,20 @@ TEST_CASE("Oversized worker responses do not interrupt request processing", "[se
         text.assign(kMaxFrameSize, 'x');
         error_response = true;
     }
+    SECTION("Large ProtocolError message") {
+        text.assign(kMaxFrameSize, 'x');
+        throw_error = true;
+    }
+    SECTION("Escaping makes a ProtocolError response too large") {
+        text.assign(kMaxFrameSize / 2, '\n');
+        throw_error = true;
+    }
 
     const RequestHandler handler;
     RunningServer fixture;
     fixture.use_workers([&](ConnectionId, const Request& request) {
         if (request.action == "large") {
+            if (throw_error) throw ProtocolError("test_error", text, request);
             if (error_response) return make_error_response(request, "test_error", text);
             return make_response(request, {{"text", text}});
         }
@@ -969,14 +979,23 @@ TEST_CASE("Oversized worker responses do not interrupt request processing", "[se
 
 TEST_CASE("Worker responses respect the exact serialized byte limit", "[server][dispatcher]") {
     std::size_t extra_byte = 0;
+    bool throw_error = false;
     SECTION("A response of exactly 64 KiB is sent") {}
     SECTION("A response one byte over the limit is replaced") { extra_byte = 1; }
+    SECTION("A ProtocolError response of exactly 64 KiB is sent") { throw_error = true; }
+    SECTION("A ProtocolError response one byte over the limit is replaced") {
+        throw_error = true;
+        extra_byte = 1;
+    }
 
     RunningServer fixture;
-    fixture.use_workers([extra_byte](ConnectionId, const Request& request) {
-        auto response = make_response(request, {{"text", ""}});
+    fixture.use_workers([extra_byte, throw_error](ConnectionId, const Request& request) {
+        auto response = throw_error ? make_error_response(request, "test_error", "")
+                                    : make_response(request, {{"text", ""}});
         const auto envelope_size = response.dump().size();
-        response["data"]["text"] = std::string(kMaxFrameSize - envelope_size + extra_byte, 'x');
+        const std::string text(kMaxFrameSize - envelope_size + extra_byte, 'x');
+        if (throw_error) throw ProtocolError("test_error", text, request);
+        response["data"]["text"] = text;
         return response;
     });
     fixture.start();
@@ -986,14 +1005,50 @@ TEST_CASE("Worker responses respect the exact serialized byte limit", "[server][
     const auto payload = receive_frame(client.get());
     const auto response = nlohmann::json::parse(payload);
     CHECK(response["request_id"] == "boundary");
+    CHECK(response["action"] == "large");
     if (extra_byte == 0) {
         CHECK(payload.size() == kMaxFrameSize);
-        CHECK(response["ok"] == true);
+        CHECK(response["ok"] == !throw_error);
+        if (throw_error) CHECK(response["error"]["code"] == "test_error");
     } else {
         CHECK(payload.size() < kMaxFrameSize);
         CHECK(response["ok"] == false);
         CHECK(response["error"]["code"] == "response_too_large");
     }
+    fixture.check();
+}
+
+TEST_CASE("Response serialization failures do not stall later requests", "[server][dispatcher]") {
+    bool throw_error = false;
+    SECTION("Invalid UTF-8 in a returned response") {}
+    SECTION("Invalid UTF-8 in a ProtocolError message") { throw_error = true; }
+
+    const RequestHandler handler;
+    RunningServer fixture;
+    fixture.use_workers([&](ConnectionId, const Request& request) {
+        if (request.action == "fail") {
+            const std::string text(1, '\xff');
+            if (throw_error) throw ProtocolError("test_error", text, request);
+            return make_response(request, {{"text", text}});
+        }
+        return handler.handle(request);
+    }, 1, 1, 1);
+    fixture.start();
+    auto client = connect_client(fixture.server.port());
+    send_all(client.get(),
+             encode_frame(R"({"type":"request","request_id":"bad","action":"fail"})"));
+    const auto failure = nlohmann::json::parse(receive_frame(client.get()));
+    CHECK(failure["request_id"] == "bad");
+    CHECK(failure["action"] == "fail");
+    CHECK(failure["ok"] == false);
+    CHECK(failure["error"]["code"] == "internal_error");
+    CHECK(failure["error"]["message"] == "Request processing failed");
+
+    send_all(client.get(),
+             encode_frame(R"({"type":"request","request_id":"next","action":"ping"})"));
+    const auto response = nlohmann::json::parse(receive_frame(client.get()));
+    CHECK(response["request_id"] == "next");
+    CHECK(response["data"]["pong"] == true);
     fixture.check();
 }
 
