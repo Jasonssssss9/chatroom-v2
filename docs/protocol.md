@@ -240,6 +240,13 @@ result sets should use pagination rather than truncating JSON.
 Transport failures, oversized incoming frames, and output-buffer limits still
 follow the connection-closing rules in [Networking](networking.md).
 
+If the client sends FIN partway through a frame header or payload, the server logs
+`truncated_frame` and discards that incomplete frame. Complete requests preceding
+it are still processed and replied to before the connection closes. There is no
+JSON error response for the partial frame; `truncated_frame` is a transport log code
+and close reason, not an application error code. FIN between complete frames is
+an ordinary half-close.
+
 ## 6. Mapping v1 Features to v2
 
 The [v1 request dispatcher](https://github.com/Jasonssssss9/chatroom-server-v1/blob/main/protocol.cpp)

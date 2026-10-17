@@ -219,7 +219,7 @@ void TcpServer::handle_event(ConnectionId id, std::uint32_t events) {
         }
         throw std::system_error(error == 0 ? EIO : error, std::generic_category(), "socket error");
     }
-    if (events & (EPOLLIN | EPOLLRDHUP | EPOLLHUP)) {
+    if (!it->second.read_closed() && (events & (EPOLLIN | EPOLLRDHUP | EPOLLHUP))) {
         while (true) {
             auto frames = it->second.receive();
             for (auto& frame : frames) {
@@ -231,6 +231,11 @@ void TcpServer::handle_event(ConnectionId id, std::uint32_t events) {
                 if (it == connections_.end()) return;
             }
             if (frames.size() < TcpConnection::kReceiveBatchSize) break;
+        }
+        if (it->second.truncated_frame()) {
+            log(LogLevel::warn, "connection_error",
+                {{"connection_id", id}, {"peer", it->second.peer_address()},
+                 {"code", "truncated_frame"}, {"error", "Connection closed in the middle of a frame"}});
         }
         // Apply synchronous replies before closing a peer that sent its final data and FIN.
         process_sends();
@@ -254,7 +259,7 @@ void TcpServer::update_connection(ConnectionId id) {
     }
     if (it->second.read_closed() && !it->second.close_deferred() &&
         !it->second.has_pending_output()) {
-        close_connection(id, "peer_closed");
+        close_connection(id, it->second.truncated_frame() ? "truncated_frame" : "peer_closed");
         return;
     }
     epoll_.modify(it->second.fd(), id, it->second.events());

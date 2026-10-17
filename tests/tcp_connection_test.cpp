@@ -47,6 +47,35 @@ TEST_CASE("A connection returns complete messages received before EOF", "[net]")
     CHECK(frames[0] == "first");
     CHECK(frames[1] == std::string("a\0b", 3));
     CHECK(connection.read_closed());
+    CHECK_FALSE(connection.truncated_frame());
+}
+
+TEST_CASE("Truncated EOF preserves complete frames and records incomplete input", "[net][eof]") {
+    auto tail = encode_frame("unfinished");
+    SECTION("Incomplete frame header") { tail.resize(2); }
+    SECTION("Incomplete frame payload") { tail.pop_back(); }
+
+    for (const int complete_count : {0, 1, 16, 20}) {
+        INFO("Complete frames before truncation: " << complete_count);
+        auto pair = socket_pair();
+        TcpConnection connection(Socket(std::move(pair[0])), "local");
+        std::string bytes;
+        for (int i = 0; i < complete_count; ++i) bytes += encode_frame(std::to_string(i));
+        bytes += tail;
+        REQUIRE(::send(pair[1].get(), bytes.data(), bytes.size(), MSG_NOSIGNAL) ==
+                static_cast<ssize_t>(bytes.size()));
+        REQUIRE(::shutdown(pair[1].get(), SHUT_WR) == 0);
+        int received = 0;
+        for (int pass = 0; pass < 4 && !connection.read_closed(); ++pass) {
+            for (const auto& frame : connection.receive()) {
+                CHECK(frame == std::to_string(received));
+                ++received;
+            }
+        }
+        CHECK(received == complete_count);
+        CHECK(connection.read_closed());
+        CHECK(connection.truncated_frame());
+    }
 }
 
 TEST_CASE("Receive batches bound temporary storage and preserve buffered frames", "[net]") {
@@ -69,6 +98,7 @@ TEST_CASE("Receive batches bound temporary storage and preserve buffered frames"
     }
     CHECK(received == message_count);
     CHECK(connection.read_closed());
+    CHECK_FALSE(connection.truncated_frame());
 }
 
 TEST_CASE("A connection retains partial output until its peer reads", "[net]") {

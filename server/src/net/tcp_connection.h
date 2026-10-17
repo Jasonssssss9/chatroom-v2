@@ -21,6 +21,7 @@ public:
 
     // Returns at most kReceiveBatchSize frames. A full batch requires another call
     // to drain buffered frames and socket input before waiting for an ET event.
+    // EOF preserves complete frames and marks truncated_frame() for trailing input.
     std::vector<std::string> receive();
 
     // Appends an already encoded frame; returns false if the output limit is exceeded.
@@ -32,6 +33,7 @@ public:
     int fd() const noexcept { return socket_.fd(); }
     const std::string& peer_address() const noexcept { return peer_address_; }
     bool read_closed() const noexcept { return read_closed_; }
+    bool truncated_frame() const noexcept { return truncated_frame_; }
     bool close_deferred() const noexcept { return close_deferred_; }
     void set_close_deferred(bool deferred) noexcept { close_deferred_ = deferred; }
     bool has_pending_output() const noexcept { return sent_ < output_.size(); }
@@ -44,6 +46,7 @@ private:
     std::string output_;
     std::size_t sent_ = 0;
     bool read_closed_ = false;
+    bool truncated_frame_ = false;
     bool close_deferred_ = false;
 };
 

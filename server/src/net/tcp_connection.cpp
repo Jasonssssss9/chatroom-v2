@@ -25,6 +25,8 @@ std::vector<std::string> TcpConnection::receive() {
             decoder_.append(std::string_view(buffer, static_cast<std::size_t>(count)));
         } else if (count == 0) {
             read_closed_ = true;
+            // Preserve complete frames from this batch; only the trailing frame is incomplete.
+            truncated_frame_ = !decoder_.empty();
             return frames;
         } else if (errno == EINTR) {
             continue;

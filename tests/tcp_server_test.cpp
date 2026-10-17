@@ -15,7 +15,9 @@
 #include <exception>
 #include <fcntl.h>
 #include <future>
+#include <iostream>
 #include <memory>
+#include <sstream>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -84,6 +86,50 @@ private:
     std::thread thread_;
     std::exception_ptr failure_;
 };
+
+// Construct before starting the Reactor and restore the stream after all threads join.
+class LogCapture {
+public:
+    LogCapture() : previous_(std::clog.rdbuf(output.rdbuf())) {}
+    ~LogCapture() { std::clog.rdbuf(previous_); }
+
+    std::ostringstream output;
+
+private:
+    std::streambuf* previous_;
+};
+
+void check_eof_logs(const std::string& text, bool truncated) {
+    std::istringstream lines(text);
+    std::string line;
+    ConnectionId first_id = 0;
+    std::string first_peer;
+    int errors = 0;
+    int closes = 0;
+    while (std::getline(lines, line)) {
+        const auto entry = nlohmann::json::parse(line);
+        const auto& context = entry.at("context");
+        if (entry.at("event") == "connection_opened" && first_id == 0) {
+            first_id = context.at("connection_id").get<ConnectionId>();
+            first_peer = context.at("peer").get<std::string>();
+        }
+        if (first_id == 0 || context.value("connection_id", ConnectionId{0}) != first_id) continue;
+        if (entry.at("event") == "connection_error") {
+            ++errors;
+            CHECK(entry.at("level") == "warn");
+            CHECK(context.at("code") == "truncated_frame");
+            CHECK(context.at("peer") == first_peer);
+            CHECK(context.at("error") == "Connection closed in the middle of a frame");
+        }
+        if (entry.at("event") == "connection_closed") {
+            ++closes;
+            CHECK(context.at("reason") == (truncated ? "truncated_frame" : "peer_closed"));
+        }
+    }
+    REQUIRE(first_id != 0);
+    CHECK(errors == (truncated ? 1 : 0));
+    CHECK(closes == 1);
+}
 
 UniqueFd connect_client(std::uint16_t port) {
     UniqueFd socket(::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0));
@@ -336,6 +382,81 @@ TEST_CASE("Final messages are echoed before a half-closed connection closes", "[
     char byte;
     CHECK(::recv(client.get(), &byte, 1, 0) == 0);
     fixture.check();
+}
+
+TEST_CASE("EOF distinguishes truncated input from an orderly half-close", "[server][eof]") {
+    auto tail = encode_frame("unfinished");
+    bool truncated = true;
+    SECTION("Incomplete frame header") { tail.resize(2); }
+    SECTION("Incomplete frame payload") { tail.pop_back(); }
+    SECTION("No incomplete frame") {
+        tail.clear();
+        truncated = false;
+    }
+    LogCapture logs;
+    RunningServer fixture;
+    fixture.start();
+    auto client = connect_client(fixture.server.port());
+    send_all(client.get(), tail);
+    REQUIRE(::shutdown(client.get(), SHUT_WR) == 0);
+    char byte;
+    CHECK(::recv(client.get(), &byte, 1, 0) == 0);
+
+    auto other = connect_client(fixture.server.port());
+    send_all(other.get(), encode_frame("still running"));
+    CHECK(receive_frame(other.get()) == "still running");
+    fixture.check();
+    check_eof_logs(logs.output.str(), truncated);
+}
+
+TEST_CASE("Complete worker requests finish before closing a truncated stream",
+          "[server][dispatcher][eof]") {
+    auto tail = encode_frame("unfinished");
+    int request_count = 20;
+    SECTION("Incomplete header after a full receive batch") {
+        request_count = static_cast<int>(TcpConnection::kReceiveBatchSize);
+        tail.resize(2);
+    }
+    SECTION("Incomplete payload after several receive batches") { tail.pop_back(); }
+    std::promise<void> started;
+    auto active = started.get_future();
+    const RequestHandler handler;
+    LogCapture logs;
+    RunningServer fixture;
+    TaskGate gate;
+    fixture.use_workers([&, wait = gate.future](ConnectionId, const Request& request) {
+        if (request.request_id == "0") {
+            started.set_value();
+            wait.wait();
+        }
+        return handler.handle(request);
+    });
+    // Queue the bytes and FIN before starting the loop, so EOF precedes task completion.
+    auto client = connect_client(fixture.server.port());
+    std::string bytes;
+    for (int i = 0; i < request_count; ++i) {
+        const nlohmann::json request{{"type", "request"}, {"request_id", std::to_string(i)},
+                                     {"action", "ping"}};
+        bytes += encode_frame(request.dump());
+    }
+    send_all(client.get(), bytes + tail);
+    REQUIRE(::shutdown(client.get(), SHUT_WR) == 0);
+    fixture.start();
+    REQUIRE(active.wait_for(2s) == std::future_status::ready);
+
+    auto other = connect_client(fixture.server.port());
+    send_all(other.get(), encode_frame(R"({"type":"request","request_id":"other","action":"ping"})"));
+    CHECK(nlohmann::json::parse(receive_frame(other.get()))["data"]["pong"] == true);
+    gate.release();
+    for (int i = 0; i < request_count; ++i) {
+        const auto response = nlohmann::json::parse(receive_frame(client.get()));
+        CHECK(response["request_id"] == std::to_string(i));
+        CHECK(response["data"]["pong"] == true);
+    }
+    char byte;
+    CHECK(::recv(client.get(), &byte, 1, 0) == 0);
+    fixture.check();
+    check_eof_logs(logs.output.str(), true);
 }
 
 TEST_CASE("An oversized frame closes only the offending connection", "[server]") {

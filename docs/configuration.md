@@ -133,7 +133,7 @@ millisecond precision.
 | `server_stopped` | `info` | The event loop returned normally |
 | `connection_opened` | `info` | Connection ID and peer IP/port |
 | `connection_closed` | `info` | Connection ID, peer IP/port, and close reason |
-| `connection_error` | `warn` | Connection ID and socket, framing, or callback error |
+| `connection_error` | `warn` | Connection ID and error details; truncated EOF also includes code `truncated_frame` and peer |
 | `connection_rejected` | `warn` | Peer, connection-limit reason, and configured limit |
 | `request_rejected` | `warn` | Connection ID, limit reason, current request counts, and configured limits |
 | `accept_paused` | `warn` | Resource error number, details, and retry delay |

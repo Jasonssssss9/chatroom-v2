@@ -111,6 +111,15 @@ does not drop their asynchronous replies. Its final completion calls `resume_clo
 to flush queued output and allow the connection to close. These two methods are
 Reactor-only. Socket errors still close the connection immediately.
 
+At EOF, `TcpConnection` checks whether the decoder still holds an incomplete
+header or payload. It marks `truncated_frame()` without throwing away complete
+frames from the same batch. The Reactor logs one `connection_error` warning with
+code `truncated_frame`, connection ID, and peer address. Only complete frames reach
+the application. Their pending replies follow the same deferred-close path; after
+they are flushed, the connection closes with reason `truncated_frame` instead of
+`peer_closed`. EOF between frames remains an ordinary half-close without a warning.
+The incomplete trailing bytes do not receive a JSON error response.
+
 Call `stop()` from a normal thread to wake the loop and stop it. Shutdown closes
 active connections and does not drain pending output. Run each server instance
 once. Pending callbacks are discarded, and later `send()` and `post()` calls are
@@ -146,6 +155,11 @@ consecutive messages, UTF-8 byte lengths, embedded zero bytes, frame limits, par
 writes, output limits, disconnected peers, half-close handling, stale replies,
 cross-thread sends, and loop shutdown. Integration tests bind to port `0` and use
 socket timeouts and futures rather than timing sleeps.
+
+EOF tests cover partial headers, partial payloads, clean half-closes, and complete
+requests followed by a truncated frame at or beyond a receive-batch boundary.
+They verify ordered worker replies, continued service for other clients, and
+exactly one warning with the correct close reason.
 
 Connection-capacity tests verify that excess clients are closed and new clients
 can connect after an active one leaves. FD-exhaustion tests lower `RLIMIT_NOFILE`

@@ -137,6 +137,13 @@ the connection. Output that cannot be sent immediately still uses `EPOLLOUT`.
 Socket errors such as a reset close the connection immediately. The deferred-close
 flag keeps an orderly half-close alive; it does not prevent error cleanup.
 
+An EOF with an incomplete trailing frame is logged as `truncated_frame`. The
+connection records this state while returning all complete frames already read.
+Those requests enter the dispatcher normally, including when the last complete
+frame ends exactly on a receive-batch boundary. The existing deferred-close path
+lets their workers finish and flush replies before closing with the truncation
+reason. The partial frame is never submitted as a task or parsed as JSON.
+
 ## Failures
 
 Malformed envelopes keep the existing protocol error behavior. They are parsed on
