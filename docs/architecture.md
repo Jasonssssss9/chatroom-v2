@@ -11,7 +11,7 @@
 - Keep the server and command-line client in the same repository and build them
   as separate executables.
 - Keep their implementations in `server/src/` and `client/src/`. Shared code in
-  `common/` contains framing and small resource utilities; neither component links to the
+  `common/` contains the protocol, framing, and small resource utilities; neither component links to the
   other's implementation.
 - Configure component-specific dependencies in each component's `CMakeLists.txt`.
   Use `BUILD_SERVER` and `BUILD_CLIENT` to select which components to build.
@@ -36,10 +36,11 @@ discard duplicates using message IDs. Unacknowledged messages can be delivered a
 
 The server network layer implements non-blocking IPv4 TCP, an epoll ET Reactor,
 message framing, buffered writes, and cross-thread sends through an eventfd-backed
-queue. The executable currently provides JSON echo behavior. Catch2 covers framing,
+queue. The executable dispatches JSON requests, implements `ping`, and returns
+correlated protocol errors. Catch2 covers framing, request validation, handlers,
 connection I/O, and TCP integration. The command-line client uses a blocking TCP
 connection with separate input and receive threads. Its library and tests can be
-built without the server. See [Networking](networking.md).
+built without the server. See [Networking](networking.md) and [JSON Protocol](protocol.md).
 
 HTTP, JWT, MySQL, and password hashing have not been
 implemented yet. Their dependencies will be added as needed.

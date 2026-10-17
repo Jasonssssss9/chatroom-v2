@@ -1,8 +1,8 @@
 #include "net/tcp_server.h"
+#include "request_handler.h"
 
 #include <charconv>
 #include <iostream>
-#include <nlohmann/json.hpp>
 #include <string_view>
 
 int main(int argc, char* argv[]) {
@@ -22,16 +22,12 @@ int main(int argc, char* argv[]) {
 
     try {
         const std::string address = argc == 3 ? argv[2] : "127.0.0.1";
+        chatroom::RequestHandler handler;
         chatroom::TcpServer server(static_cast<std::uint16_t>(port), address);
-        server.set_message_handler([&server](chatroom::ConnectionId id, std::string payload) {
-            const auto json = nlohmann::json::parse(payload, nullptr, false);
-            if (json.is_discarded()) {
-                server.send(id, R"({"error":"invalid_json"})");
-            } else {
-                server.send(id, json.dump());
-            }
+        server.set_message_handler([&](chatroom::ConnectionId id, std::string payload) {
+            server.send(id, handler.handle(payload).dump());
         });
-        std::cout << "JSON echo server listening on " << address << ':' << server.port()
+        std::cout << "Chat server listening on " << address << ':' << server.port()
                   << std::endl;
         server.run();
     } catch (const std::exception& error) {

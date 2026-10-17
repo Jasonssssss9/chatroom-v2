@@ -1,4 +1,5 @@
 #include "net/tcp_server.h"
+#include "request_handler.h"
 
 #include <arpa/inet.h>
 #include <catch2/catch_test_macros.hpp>
@@ -227,4 +228,28 @@ TEST_CASE("Listener and accepted sockets are non-blocking and close on exec", "[
     CHECK((::fcntl(accepted.fd(), F_GETFL) & O_NONBLOCK) != 0);
     CHECK((::fcntl(accepted.fd(), F_GETFD) & FD_CLOEXEC) != 0);
     CHECK(peer.find("127.0.0.1:") == 0);
+}
+
+TEST_CASE("Protocol errors allow later requests on the same TCP connection", "[server][protocol]") {
+    const RequestHandler handler;
+    RunningServer fixture;
+    fixture.server.set_message_handler([&](ConnectionId id, std::string payload) {
+        fixture.server.send(id, handler.handle(payload).dump());
+    });
+    fixture.start();
+    auto client = connect_client(fixture.server.port());
+    send_all(client.get(), encode_frame("{broken") +
+                               encode_frame(R"({"type":"request","action":"ping"})") +
+                               encode_frame(
+                                   R"({"type":"request","request_id":"r1","action":"ping"})"));
+    REQUIRE(::shutdown(client.get(), SHUT_WR) == 0);
+    const auto malformed = nlohmann::json::parse(receive_frame(client.get()));
+    const auto invalid = nlohmann::json::parse(receive_frame(client.get()));
+    const auto success = nlohmann::json::parse(receive_frame(client.get()));
+    CHECK(malformed["error"]["code"] == "invalid_json");
+    CHECK(invalid["error"]["code"] == "invalid_request");
+    CHECK(success["request_id"] == "r1");
+    CHECK(success["ok"] == true);
+    CHECK(success["data"]["pong"] == true);
+    fixture.check();
 }

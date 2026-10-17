@@ -36,7 +36,7 @@ bool ConsoleClient::send_line(std::string_view line) {
     if (line.size() > kMaxFrameSize) {
         print("Message exceeds the 64 KiB limit.\n> ");
     } else if (!nlohmann::json::accept(line.begin(), line.end())) {
-        print("Invalid JSON. Enter a JSON value or /quit.\n> ");
+        print("Invalid JSON. Enter a JSON request or /quit.\n> ");
     } else {
         client_.send(line);
         print("> ");
@@ -104,7 +104,7 @@ void ConsoleClient::receive_messages() {
 }
 
 void ConsoleClient::run() {
-    print("Enter one JSON value per line. Use /quit to disconnect.\n> ");
+    print("Enter one JSON request per line. Use /quit to disconnect.\n> ");
     std::thread receiver([this] { receive_messages(); });
     InputResult result;
     try {

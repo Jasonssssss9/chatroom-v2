@@ -8,6 +8,7 @@
 | `Socket` | Creates IPv4 listeners, accepts connections, and wraps Linux receive/send calls |
 | `Epoll` | Owns the epoll instance and registers, updates, removes, and waits for events |
 | `FrameDecoder` | Extracts length-prefixed payloads while retaining incomplete input |
+| `RequestHandler` | Validates and dispatches application JSON requests separately from socket I/O |
 | `TcpConnection` | Owns one client's socket, input decoder, and buffered output |
 | `TcpServer` | Runs the Reactor, manages connections, and invokes application callbacks |
 | `TcpClient` | Owns one blocking IPv4 connection and sends or receives complete frames |
@@ -16,7 +17,9 @@
 The implementation uses Linux socket APIs directly. Server sockets are non-blocking
 and close on exec. ET handlers accept, read, or write until `EAGAIN`; `EINTR` retries
 the interrupted operation. Writes use `MSG_NOSIGNAL` so a closed peer cannot terminate
-the process with `SIGPIPE`.
+the process with `SIGPIPE`. The executable uses the [JSON protocol](protocol.md)
+on top of this byte-oriented network layer; network tests may use simple echo
+callbacks independently of the application handler.
 
 Startup and epoll failures use `std::system_error`. A connection's read, write,
 framing, or message-handler failure is reported to standard error and closes that
@@ -59,7 +62,7 @@ keep both directions open while awaiting asynchronous results.
 Call `stop()` from a normal thread to wake the loop and stop it. Shutdown closes
 active connections and does not drain pending output. Run each server instance
 once. Stop producers and join the loop thread before destroying the server.
-`stop()` is not a signal-handler API; the echo executable currently uses normal
+`stop()` is not a signal-handler API; the server executable currently uses normal
 process termination for Ctrl+C.
 
 ## Client Networking
