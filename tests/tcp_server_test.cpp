@@ -1,7 +1,10 @@
 #include "net/tcp_server.h"
 #include "request_handler.h"
+#include "request_dispatcher.h"
+#include "task_gate.h"
 
 #include <arpa/inet.h>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cerrno>
@@ -9,6 +12,7 @@
 #include <exception>
 #include <fcntl.h>
 #include <future>
+#include <memory>
 #include <sys/socket.h>
 #include <thread>
 
@@ -20,6 +24,7 @@ namespace {
 class RunningServer {
 public:
     TcpServer server{0};
+    std::unique_ptr<RequestDispatcher> dispatcher;
 
     RunningServer() {
         server.set_message_handler([this](ConnectionId id, std::string payload) {
@@ -28,6 +33,14 @@ public:
     }
 
     ~RunningServer() { finish(); }
+
+    void use_workers(RequestDispatcher::Handler handler, std::size_t worker_count = 2) {
+        dispatcher = std::make_unique<RequestDispatcher>(server, std::move(handler), worker_count);
+        server.set_message_handler([this](ConnectionId id, std::string payload) {
+            dispatcher->enqueue(id, std::move(payload));
+        });
+        server.set_disconnect_handler([this](ConnectionId id) { dispatcher->disconnect(id); });
+    }
 
     void start() {
         thread_ = std::thread([this] {
@@ -39,11 +52,16 @@ public:
         });
     }
 
-    void finish() {
+    void stop_loop() {
         if (thread_.joinable()) {
             server.stop();
             thread_.join();
         }
+    }
+
+    void finish() {
+        stop_loop();
+        dispatcher.reset();
     }
 
     void check() {
@@ -252,4 +270,166 @@ TEST_CASE("Protocol errors allow later requests on the same TCP connection", "[s
     CHECK(success["ok"] == true);
     CHECK(success["data"]["pong"] == true);
     fixture.check();
+}
+
+TEST_CASE("Slow work leaves I/O responsive and preserves each connection's order",
+          "[server][dispatcher]") {
+    std::promise<void> slow_started;
+    std::promise<void> next_started;
+    auto slow = slow_started.get_future();
+    auto next = next_started.get_future();
+    RunningServer fixture;
+    TaskGate gate;
+    fixture.use_workers([&, wait = gate.future](ConnectionId, const Request& request) {
+        if (request.action == "slow") {
+            slow_started.set_value();
+            wait.wait();
+        } else if (request.action == "next") {
+            next_started.set_value();
+        }
+        return make_response(request);
+    });
+    fixture.start();
+    auto first = connect_client(fixture.server.port());
+    auto second = connect_client(fixture.server.port());
+    send_all(first.get(),
+             encode_frame(R"({"type":"request","request_id":"a1","action":"slow"})") +
+                 encode_frame(R"({"type":"request","request_id":"a2","action":"next"})"));
+    REQUIRE(slow.wait_for(2s) == std::future_status::ready);
+    CHECK(next.wait_for(0s) == std::future_status::timeout);
+
+    send_all(second.get(),
+             encode_frame(R"({"type":"request","request_id":"b1","action":"ping"})"));
+    CHECK(nlohmann::json::parse(receive_frame(second.get()))["request_id"] == "b1");
+    CHECK(next.wait_for(0s) == std::future_status::timeout);
+    gate.release();
+    CHECK(nlohmann::json::parse(receive_frame(first.get()))["request_id"] == "a1");
+    CHECK(nlohmann::json::parse(receive_frame(first.get()))["request_id"] == "a2");
+    fixture.check();
+}
+
+TEST_CASE("Half-closed clients receive every queued worker response", "[server][dispatcher]") {
+    const RequestHandler handler;
+    RunningServer fixture;
+    fixture.use_workers(
+        [&](ConnectionId, const Request& request) { return handler.handle(request); });
+    fixture.start();
+    auto client = connect_client(fixture.server.port());
+    std::string frames;
+    for (int i = 0; i < 20; ++i) {
+        const nlohmann::json request{{"type", "request"}, {"request_id", std::to_string(i)},
+                                     {"action", "ping"}};
+        frames += encode_frame(request.dump());
+    }
+    send_all(client.get(), frames);
+    REQUIRE(::shutdown(client.get(), SHUT_WR) == 0);
+    for (int i = 0; i < 20; ++i) {
+        const auto response = nlohmann::json::parse(receive_frame(client.get()));
+        CHECK(response["request_id"] == std::to_string(i));
+        CHECK(response["data"]["pong"] == true);
+    }
+    char byte;
+    CHECK(::recv(client.get(), &byte, 1, 0) == 0);
+    fixture.check();
+}
+
+TEST_CASE("Disconnect discards waiting requests and late worker completions",
+          "[server][dispatcher]") {
+    std::promise<ConnectionId> started;
+    auto active = started.get_future();
+    std::promise<void> disconnected;
+    auto closed = disconnected.get_future();
+    std::atomic<int> waiting_executed{0};
+    std::atomic<ConnectionId> old_id{0};
+    RunningServer fixture;
+    TaskGate gate;
+    fixture.use_workers([&, wait = gate.future](ConnectionId id, const Request& request) {
+        if (request.action == "slow") {
+            old_id = id;
+            started.set_value(id);
+            wait.wait();
+        } else if (request.action == "waiting") {
+            ++waiting_executed;
+        }
+        return make_response(request);
+    });
+    fixture.server.set_disconnect_handler([&](ConnectionId id) {
+        fixture.dispatcher->disconnect(id);
+        if (id == old_id) {
+            disconnected.set_value();
+        }
+    });
+    fixture.start();
+    auto client = connect_client(fixture.server.port());
+    send_all(client.get(),
+             encode_frame(R"({"type":"request","request_id":"old1","action":"slow"})") +
+                 encode_frame(R"({"type":"request","request_id":"old2","action":"waiting"})"));
+    REQUIRE(active.wait_for(2s) == std::future_status::ready);
+    active.get();
+    const linger reset{1, 0};
+    REQUIRE(::setsockopt(client.get(), SOL_SOCKET, SO_LINGER, &reset, sizeof(reset)) == 0);
+    client.reset();
+    REQUIRE(closed.wait_for(2s) == std::future_status::ready);
+
+    auto replacement = connect_client(fixture.server.port());
+    gate.release();
+    send_all(replacement.get(),
+             encode_frame(R"({"type":"request","request_id":"fresh","action":"ping"})"));
+    CHECK(nlohmann::json::parse(receive_frame(replacement.get()))["request_id"] == "fresh");
+    fixture.check();
+    CHECK(waiting_executed == 0);
+}
+
+TEST_CASE("A failed worker request does not stall the next request", "[server][dispatcher]") {
+    const RequestHandler handler;
+    RunningServer fixture;
+    fixture.use_workers([&](ConnectionId, const Request& request) {
+        if (request.action == "fail") {
+            throw std::runtime_error("Expected handler failure");
+        }
+        return handler.handle(request);
+    });
+    fixture.start();
+    auto client = connect_client(fixture.server.port());
+    send_all(client.get(),
+             encode_frame(R"({"type":"request","request_id":"bad","action":"fail"})") +
+                 encode_frame("{broken") +
+                 encode_frame(R"({"type":"request","request_id":"good","action":"ping"})"));
+    const auto failure = nlohmann::json::parse(receive_frame(client.get()));
+    CHECK(failure["request_id"] == "bad");
+    CHECK(failure["error"]["code"] == "internal_error");
+    const auto malformed = nlohmann::json::parse(receive_frame(client.get()));
+    CHECK(malformed["error"]["code"] == "invalid_json");
+    const auto success = nlohmann::json::parse(receive_frame(client.get()));
+    CHECK(success["request_id"] == "good");
+    CHECK(success["ok"] == true);
+    fixture.check();
+}
+
+TEST_CASE("Stopping the Reactor before workers finish is safe", "[server][dispatcher]") {
+    std::promise<void> started;
+    auto active = started.get_future();
+    std::atomic<int> finished{0};
+    std::atomic<bool> completion_ran{false};
+    RunningServer fixture;
+    TaskGate gate;
+    fixture.use_workers([&, wait = gate.future](ConnectionId, const Request& request) {
+        started.set_value();
+        wait.wait();
+        ++finished;
+        return make_response(request);
+    });
+    fixture.start();
+    auto client = connect_client(fixture.server.port());
+    send_all(client.get(),
+             encode_frame(R"({"type":"request","request_id":"r1","action":"slow"})"));
+    REQUIRE(active.wait_for(2s) == std::future_status::ready);
+    fixture.stop_loop();
+    fixture.server.post([&] { completion_ran = true; });
+    char byte;
+    CHECK(::recv(client.get(), &byte, 1, 0) == 0);
+    gate.release();
+    fixture.check();
+    CHECK(finished == 1);
+    CHECK_FALSE(completion_ran);
 }

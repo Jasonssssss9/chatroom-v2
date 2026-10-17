@@ -9,6 +9,8 @@ Uploaded files are stored on disk, with their metadata in MySQL.
 The server and client network layers are implemented. The server accepts JSON
 requests, supports `ping`, and returns structured errors. The command-line client
 sends one JSON request per line.
+Application requests run on four worker threads, in order for each connection,
+and their results return to the Reactor for socket output.
 Authentication, chat features, and database access are still planned.
 
 ## Project Layout
@@ -31,6 +33,8 @@ docs/               Design and usage documentation
 See [Architecture](docs/architecture.md) for the design and project conventions,
 [Networking](docs/networking.md) for the network API, and [JSON Protocol](docs/protocol.md)
 for request fields, response examples, errors, and the mapping from v1.
+The [threading guide](docs/threading.md) explains task queues, ownership, ordering,
+and shutdown with active work.
 
 ## Building
 
@@ -50,7 +54,7 @@ The build provides these targets:
 | --- | --- | --- |
 | `chatroom_common` | `common/CMakeLists.txt` | Shared framing and JSON protocol library |
 | `chatroom_net` | `server/CMakeLists.txt` | Server network library |
-| `chatroom_app` | `server/CMakeLists.txt` | Application request handler |
+| `chatroom_app` | `server/CMakeLists.txt` | Request dispatcher, handlers, and worker pool |
 | `chatroom_server` | `server/CMakeLists.txt` | TCP server with ping and protocol errors |
 | `chatroom_client_net` | `client/CMakeLists.txt` | Blocking TCP client library |
 | `chatroom_client` | `client/CMakeLists.txt` | Command-line JSON client |

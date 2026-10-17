@@ -220,6 +220,7 @@ is not part of the wire message.
 | `invalid_json` | Malformed JSON or invalid UTF-8 | Kept open |
 | `invalid_request` | Wrong root, type, metadata, or data type | Kept open |
 | `unknown_action` | Valid envelope with an unsupported action | Kept open |
+| `internal_error` | Unexpected application-handler failure | Kept open |
 
 Envelope validation happens before action dispatch. Within an object, the parser
 checks `type`, `request_id`, `action`, then `data`, and reports the first failing
@@ -284,10 +285,10 @@ not part of the current `ping` implementation.
 
 ```text
 FrameDecoder extracts a payload
-    -> parse_request validates the JSON envelope
-    -> RequestHandler dispatches the action
-    -> a response builder creates JSON
-    -> TcpServer frames and queues the serialized response
+    -> RequestDispatcher queues it by connection ID
+    -> a worker parses the envelope and calls RequestHandler
+    -> the worker serializes the response and posts a completion
+    -> the Reactor queues output and starts the next request
 ```
 
 `common/protocol.h` defines `Request`, `ProtocolError`, and message builders.
@@ -299,5 +300,7 @@ in the handler, returning the standard response, and adding tests and examples.
 There is no handler registration framework or separate schema language. Builders
 accept trusted application data rather than revalidating server-generated values.
 
-Handlers currently run on the Reactor thread and must remain short. Database work
-will be moved to the worker pool when that layer is implemented.
+Handlers run on the fixed worker pool. Requests on one connection execute in order;
+different connections can execute concurrently. Completions are applied by the
+Reactor. See [Worker Pool and Request Handoff](threading.md) for ownership,
+disconnects, and shutdown behavior.

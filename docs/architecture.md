@@ -36,11 +36,13 @@ discard duplicates using message IDs. Unacknowledged messages can be delivered a
 
 The server network layer implements non-blocking IPv4 TCP, an epoll ET Reactor,
 message framing, buffered writes, and cross-thread sends through an eventfd-backed
-queue. The executable dispatches JSON requests, implements `ping`, and returns
+queue. A four-worker pool parses and handles requests, with per-connection ordering
+and completions returned to the Reactor. The executable implements `ping` and
 correlated protocol errors. Catch2 covers framing, request validation, handlers,
 connection I/O, and TCP integration. The command-line client uses a blocking TCP
 connection with separate input and receive threads. Its library and tests can be
-built without the server. See [Networking](networking.md) and [JSON Protocol](protocol.md).
+built without the server. See [Networking](networking.md), [JSON Protocol](protocol.md),
+and [Worker Pool and Request Handoff](threading.md).
 
 HTTP, JWT, MySQL, and password hashing have not been
 implemented yet. Their dependencies will be added as needed.

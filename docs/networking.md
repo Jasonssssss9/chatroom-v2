@@ -9,6 +9,7 @@
 | `Epoll` | Owns the epoll instance and registers, updates, removes, and waits for events |
 | `FrameDecoder` | Extracts length-prefixed payloads while retaining incomplete input |
 | `RequestHandler` | Validates and dispatches application JSON requests separately from socket I/O |
+| `RequestDispatcher` | Submits one request per connection to workers and applies completions on the Reactor |
 | `TcpConnection` | Owns one client's socket, input decoder, and buffered output |
 | `TcpServer` | Runs the Reactor, manages connections, and invokes application callbacks |
 | `TcpClient` | Owns one blocking IPv4 connection and sends or receives complete frames |
@@ -40,8 +41,9 @@ limits its unsent output buffer to 1 MiB; exceeding that limit closes the connec
 ## Thread Ownership
 
 Configure the message and disconnect handlers before calling `run()`. They execute
-on the Reactor thread and should return promptly. Future business handlers will
-submit database work to a separate thread pool.
+on the Reactor thread and should return promptly. The executable wires them to
+`RequestDispatcher`, which runs parsing, application work, and serialization on a
+fixed worker pool. See [Worker Pool and Request Handoff](threading.md).
 
 Only the Reactor thread accesses connections and their buffers. `send(id, payload)`
 can be called from another thread: it copies and frames the payload, puts it in a
@@ -50,18 +52,26 @@ for each accepted connection and are stored in epoll events. A delayed result fo
 a closed connection is discarded even if its socket number has been reused.
 
 `send()` queues output; it does not confirm delivery to the peer. Senders that need
-an application-level ordering rule must submit their results in that order.
+an application-level ordering rule must submit their results in that order. The
+dispatcher guarantees this for requests on one connection.
+
+`post(callback)` queues a short callback on the same eventfd-backed wakeup path.
+Callbacks execute on the Reactor and must not perform blocking work. Captured
+objects must outlive the event loop. Application completions use this API to look
+up the connection ID again and advance the corresponding request queue.
 
 ## Connection and Server Shutdown
 
-When the peer shuts down its write side, complete final frames are processed and
-already queued replies are flushed before the server closes the socket. An EOF
-does not keep the connection alive for future asynchronous replies. Clients should
-keep both directions open while awaiting asynchronous results.
+When the peer shuts down its write side, complete final frames are processed.
+The dispatcher calls `defer_close()` while application requests remain, so EOF
+does not drop their asynchronous replies. Its final completion calls `resume_close()`
+to flush queued output and allow the connection to close. These two methods are
+Reactor-only. Socket errors still close the connection immediately.
 
 Call `stop()` from a normal thread to wake the loop and stop it. Shutdown closes
 active connections and does not drain pending output. Run each server instance
-once. Stop producers and join the loop thread before destroying the server.
+once. Pending callbacks are discarded, and later `send()` and `post()` calls are
+ignored. Join the loop and worker threads before destroying the server.
 `stop()` is not a signal-handler API; the server executable currently uses normal
 process termination for Ctrl+C.
 

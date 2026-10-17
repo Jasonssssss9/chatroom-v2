@@ -48,10 +48,53 @@ void TcpServer::notify() {
 void TcpServer::send(ConnectionId id, std::string_view payload) {
     PendingSend pending{id, encode_frame(payload)};
     {
-        std::lock_guard<std::mutex> lock(sends_mutex_);
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        if (stopped_) {
+            return;
+        }
         pending_sends_.push(std::move(pending));
     }
     notify();
+}
+
+void TcpServer::post(std::function<void()> callback) {
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        if (stopped_) {
+            return;
+        }
+        pending_callbacks_.push(std::move(callback));
+    }
+    notify();
+}
+
+void TcpServer::process_callbacks() {
+    std::queue<std::function<void()>> callbacks;
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        callbacks.swap(pending_callbacks_);
+    }
+    while (!callbacks.empty() && !stopped_) {
+        callbacks.front()();
+        callbacks.pop();
+    }
+}
+
+void TcpServer::defer_close(ConnectionId id) {
+    const auto it = connections_.find(id);
+    if (it != connections_.end()) {
+        it->second.set_close_deferred(true);
+    }
+}
+
+void TcpServer::resume_close(ConnectionId id) {
+    const auto it = connections_.find(id);
+    if (it == connections_.end()) {
+        return;
+    }
+    it->second.set_close_deferred(false);
+    process_sends();
+    update_connection(id);
 }
 
 void TcpServer::stop() {
@@ -88,7 +131,7 @@ void TcpServer::process_sends() {
     std::queue<PendingSend> sends;
     std::vector<ConnectionId> updated;
     {
-        std::lock_guard<std::mutex> lock(sends_mutex_);
+        std::lock_guard<std::mutex> lock(queue_mutex_);
         sends.swap(pending_sends_);
     }
     while (!sends.empty()) {
@@ -160,7 +203,8 @@ void TcpServer::update_connection(ConnectionId id) {
     if (it == connections_.end()) {
         return;
     }
-    if (it->second.read_closed() && !it->second.has_pending_output()) {
+    if (it->second.read_closed() && !it->second.close_deferred() &&
+        !it->second.has_pending_output()) {
         close_connection(id);
         return;
     }
@@ -181,35 +225,51 @@ void TcpServer::close_connection(ConnectionId id) {
 
 void TcpServer::run() {
     std::array<epoll_event, 64> events;
-    while (!stopped_) {
-        const int count = epoll_.wait(events.data(), static_cast<int>(events.size()));
-        for (int i = 0; i < count && !stopped_; ++i) {
-            const auto id = events[i].data.u64;
-            if (id == kListener) {
-                accept_connections();
-            } else if (id == kWakeup) {
-                std::uint64_t value;
-                ssize_t result;
-                do {
-                    result = ::read(wakeup_fd_.get(), &value, sizeof(value));
-                } while (result < 0 && errno == EINTR);
-                if (result < 0 && errno != EAGAIN) {
-                    throw std::system_error(errno, std::generic_category(), "read(eventfd)");
-                }
-                process_sends();
-            } else {
-                try {
-                    handle_event(id, events[i].events);
-                } catch (const std::exception& error) {
-                    std::cerr << "Connection " << id << ": " << error.what() << '\n';
-                    close_connection(id);
+    try {
+        while (!stopped_) {
+            const int count = epoll_.wait(events.data(), static_cast<int>(events.size()));
+            for (int i = 0; i < count && !stopped_; ++i) {
+                const auto id = events[i].data.u64;
+                if (id == kListener) {
+                    accept_connections();
+                } else if (id == kWakeup) {
+                    std::uint64_t value;
+                    ssize_t result;
+                    do {
+                        result = ::read(wakeup_fd_.get(), &value, sizeof(value));
+                    } while (result < 0 && errno == EINTR);
+                    if (result < 0 && errno != EAGAIN) {
+                        throw std::system_error(errno, std::generic_category(), "read(eventfd)");
+                    }
+                    process_callbacks();
+                    if (!stopped_) {
+                        process_sends();
+                    }
+                } else {
+                    try {
+                        handle_event(id, events[i].events);
+                    } catch (const std::exception& error) {
+                        std::cerr << "Connection " << id << ": " << error.what() << '\n';
+                        close_connection(id);
+                    }
                 }
             }
         }
+    } catch (...) {
+        cleanup();
+        throw;
     }
+    cleanup();
+}
+
+void TcpServer::cleanup() {
+    stopped_ = true;
     while (!connections_.empty()) {
         close_connection(connections_.begin()->first);
     }
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    pending_sends_ = {};
+    pending_callbacks_ = {};
 }
 
 } // namespace chatroom

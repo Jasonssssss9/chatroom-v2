@@ -9,6 +9,7 @@ namespace chatroom {
 class RequestHandler {
 public:
     nlohmann::json handle(std::string_view payload) const;
+    nlohmann::json handle(const Request& request) const;
 };
 
 } // namespace chatroom

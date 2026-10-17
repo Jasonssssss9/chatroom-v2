@@ -12,7 +12,7 @@
 namespace chatroom {
 
 // Single-threaded TCP Reactor. Callbacks run on the thread executing run().
-// Configure handlers before run(); only send() and stop() may be called concurrently.
+// Configure handlers before run(); send(), post(), and stop() are thread-safe.
 // Run once, then join the loop and all producers before destroying the server.
 class TcpServer {
 public:
@@ -30,6 +30,15 @@ public:
     // Queues a framed payload for the loop. Results for closed connections are discarded.
     void send(ConnectionId id, std::string_view payload);
 
+    // Runs a short completion callback on the Reactor thread. Ignored after stop().
+    // Captured objects must outlive run(); callbacks must not perform blocking work.
+    void post(std::function<void()> callback);
+
+    // Reactor-only: retain a half-closed connection while application work is pending.
+    // resume_close() flushes queued replies before checking whether EOF can close it.
+    void defer_close(ConnectionId id);
+    void resume_close(ConnectionId id);
+
     // Wakes the loop and stops it without draining pending output.
     void stop();
 
@@ -42,9 +51,11 @@ private:
     void notify();
     void accept_connections();
     void process_sends();
+    void process_callbacks();
     void handle_event(ConnectionId id, std::uint32_t events);
     void update_connection(ConnectionId id);
     void close_connection(ConnectionId id);
+    void cleanup();
 
     Socket listener_;
     Epoll epoll_;
@@ -55,8 +66,9 @@ private:
     DisconnectHandler on_disconnect_;
 
     std::atomic<bool> stopped_{false};
-    std::mutex sends_mutex_;
+    std::mutex queue_mutex_;
     std::queue<PendingSend> pending_sends_;
+    std::queue<std::function<void()>> pending_callbacks_;
 };
 
 } // namespace chatroom

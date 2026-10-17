@@ -30,6 +30,8 @@ public:
     int fd() const noexcept { return socket_.fd(); }
     const std::string& peer_address() const noexcept { return peer_address_; }
     bool read_closed() const noexcept { return read_closed_; }
+    bool close_deferred() const noexcept { return close_deferred_; }
+    void set_close_deferred(bool deferred) noexcept { close_deferred_ = deferred; }
     bool has_pending_output() const noexcept { return sent_ < output_.size(); }
     std::uint32_t events() const noexcept;
 
@@ -40,6 +42,7 @@ private:
     std::string output_;
     std::size_t sent_ = 0;
     bool read_closed_ = false;
+    bool close_deferred_ = false;
 };
 
 } // namespace chatroom

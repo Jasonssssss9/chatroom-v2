@@ -1,9 +1,11 @@
 #include "net/tcp_server.h"
+#include "request_dispatcher.h"
 #include "request_handler.h"
 
 #include <charconv>
 #include <iostream>
 #include <string_view>
+#include <utility>
 
 int main(int argc, char* argv[]) {
     unsigned int port = 8081;
@@ -24,9 +26,14 @@ int main(int argc, char* argv[]) {
         const std::string address = argc == 3 ? argv[2] : "127.0.0.1";
         chatroom::RequestHandler handler;
         chatroom::TcpServer server(static_cast<std::uint16_t>(port), address);
+        chatroom::RequestDispatcher dispatcher(
+            server, [&handler](chatroom::ConnectionId, const chatroom::Request& request) {
+                return handler.handle(request);
+            });
         server.set_message_handler([&](chatroom::ConnectionId id, std::string payload) {
-            server.send(id, handler.handle(payload).dump());
+            dispatcher.enqueue(id, std::move(payload));
         });
+        server.set_disconnect_handler([&](chatroom::ConnectionId id) { dispatcher.disconnect(id); });
         std::cout << "Chat server listening on " << address << ':' << server.port()
                   << std::endl;
         server.run();
