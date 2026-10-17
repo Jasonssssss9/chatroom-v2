@@ -120,7 +120,8 @@ even after disconnect. See [Request Capacity](docs/threading.md#request-capacity
 Each request is a four-byte unsigned payload length in network byte order followed
 by UTF-8 JSON. A request must include `type`, `request_id`, and `action`; `data` is
 an optional object. The server currently supports `ping`. Invalid requests receive
-structured error responses, and oversized frames close the connection. See the
+structured error responses. JSON nesting is limited to 64 levels, counting the
+root object as level 1; oversized frames close the connection. See the
 [protocol reference](docs/protocol.md) for the complete format. Plain text sent
 with a terminal tool is not a framed request.
 

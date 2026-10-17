@@ -77,6 +77,17 @@ The root must be a JSON object. Arrays, numbers, strings, booleans, and `null` a
 not request envelopes. An explicitly supplied `data` must be an object; `null`
 does not mean the same thing as omitting it.
 
+Requests may contain at most 64 nested objects and arrays. The root object counts
+as level 1, and the `data` object counts as level 2. Empty containers count too;
+brackets and braces inside strings do not. The limit applies to the entire
+payload, including unknown fields. It is independent of the 65,536-byte frame limit.
+
+A deeper payload is rejected during parsing with `invalid_request` and the message
+`JSON nesting exceeds the 64-level limit`. Both correlation fields are `null`
+because envelope validation has not run. The connection stays open, and later
+requests are processed normally. Checking during parsing prevents deeply nested
+data from reaching recursive JSON copying or serialization.
+
 Unknown top-level fields are ignored. Each operation will validate its own data
 fields when that operation is implemented. The envelope parser does not know
 about passwords, recipients, or group membership.
@@ -123,8 +134,8 @@ Errors contain an `error` object and no `data` field. Clients should branch on
 `error.code`. The English `message` is for people and may become more descriptive
 without changing the error code.
 
-Valid correlation fields are retained even if another part of the request is
-invalid. For example, this request has invalid data:
+After parsing completes, valid correlation fields are retained even if another
+part of the request is invalid. For example, this request has invalid data:
 
 ```json
 {
@@ -220,7 +231,7 @@ responses with a `<` prefix; that prefix is not part of the wire message.
 | Code | Cause | Connection |
 | --- | --- | --- |
 | `invalid_json` | Malformed JSON or invalid UTF-8 | Kept open |
-| `invalid_request` | Wrong root, type, metadata, or data type | Kept open |
+| `invalid_request` | Excessive JSON nesting, wrong root, type, metadata, or data type | Kept open |
 | `unknown_action` | Valid envelope with an unsupported action | Kept open |
 | `internal_error` | Unexpected application-handler failure | Kept open |
 | `response_too_large` | Serialized handler response exceeds 65,536 bytes | Kept open |

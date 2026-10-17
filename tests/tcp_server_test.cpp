@@ -890,6 +890,35 @@ TEST_CASE("A failed worker request does not stall the next request", "[server][d
     fixture.check();
 }
 
+TEST_CASE("Excessive JSON nesting does not stall later worker requests",
+          "[server][dispatcher][protocol]") {
+    const RequestHandler handler;
+    RunningServer fixture;
+    fixture.use_workers([&](ConnectionId, const Request& request) {
+        return handler.handle(request);
+    }, 1);
+    fixture.start();
+    auto client = connect_client(fixture.server.port());
+    const auto deep =
+        R"({"type":"request","request_id":"deep","action":"ping","data":{"nested":)" +
+        std::string(30000, '[') + "0" + std::string(30000, ']') + "}}";
+    send_all(client.get(), encode_frame(deep) +
+        encode_frame(R"({"type":"request","request_id":"next","action":"ping"})"));
+    REQUIRE(::shutdown(client.get(), SHUT_WR) == 0);
+
+    const auto error = nlohmann::json::parse(receive_frame(client.get()));
+    CHECK(error["ok"] == false);
+    CHECK(error["error"]["code"] == "invalid_request");
+    CHECK(error["request_id"].is_null());
+    CHECK(error["action"].is_null());
+    const auto response = nlohmann::json::parse(receive_frame(client.get()));
+    CHECK(response["request_id"] == "next");
+    CHECK(response["ok"] == true);
+    CHECK(response["data"]["pong"] == true);
+    expect_closed(client.get());
+    fixture.check();
+}
+
 TEST_CASE("Oversized worker responses do not interrupt request processing", "[server][dispatcher]") {
     std::string text;
     bool error_response = false;

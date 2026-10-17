@@ -1,9 +1,23 @@
 #include "protocol.h"
+#include "framing.h"
 
 #include <catch2/catch_test_macros.hpp>
 
 using namespace chatroom;
 using nlohmann::json;
+
+namespace {
+// Build nested input as text so the test itself does not recursively copy JSON.
+std::string nested_json(int levels, bool arrays, std::string_view leaf = "0") {
+    std::string value;
+    for (int i = 0; i < levels; ++i) {
+        value += arrays ? "[" : R"({"child":)";
+    }
+    value += leaf;
+    value.append(levels, arrays ? ']' : '}');
+    return value;
+}
+} // namespace
 
 TEST_CASE("Requests contain an ID, action, and object data", "[protocol]") {
     const auto request = parse_request(
@@ -25,6 +39,51 @@ TEST_CASE("Request parsing rejects malformed JSON and non-object roots", "[proto
         INFO(payload);
         CHECK_THROWS_AS(parse_request(payload), ProtocolError);
     }
+}
+
+TEST_CASE("JSON nesting allows 64 container levels and rejects level 65", "[protocol]") {
+    for (const bool arrays : {false, true}) {
+        for (const auto* leaf : {"0", "{}", "[]"}) {
+            INFO("arrays=" << arrays << ", leaf=" << leaf);
+            const std::string prefix =
+                R"({"type":"request","request_id":"r1","action":"ping","data":{"nested":)";
+            // Root and data use two levels; an empty container leaf uses one more.
+            const int levels = std::string_view(leaf) == "0" ? 62 : 61;
+            const auto allowed = nested_json(levels, arrays, leaf);
+            const auto request = parse_request(prefix + allowed + "}}");
+            CHECK(request.data.at("nested").dump() == allowed);
+            CHECK_THROWS_AS(parse_request(prefix + nested_json(levels + 1, arrays, leaf) + "}}"),
+                            ProtocolError);
+        }
+    }
+}
+
+TEST_CASE("JSON nesting limits also apply to ignored fields", "[protocol]") {
+    const auto payload = R"({"ignored":)" + nested_json(64, true) +
+        R"(,"type":"request","request_id":"r1","action":"ping"})";
+    CHECK_THROWS_AS(parse_request(payload), ProtocolError);
+}
+
+TEST_CASE("Deep JSON is rejected within the frame size limit", "[protocol]") {
+    const auto payload =
+        R"({"type":"request","request_id":"r1","action":"ping","data":{"nested":)" +
+        nested_json(30000, true) + "}}";
+    REQUIRE(payload.size() <= kMaxFrameSize);
+    try {
+        parse_request(payload);
+        FAIL("Excessive nesting was accepted");
+    } catch (const ProtocolError& error) {
+        CHECK(error.code == "invalid_request");
+        CHECK(error.request.request_id.empty());
+        CHECK(error.request.action.empty());
+    }
+}
+
+TEST_CASE("JSON delimiters inside strings do not increase nesting depth", "[protocol]") {
+    const std::string text = std::string(100, '[') + std::string(100, '{') + R"(\"quoted\")";
+    const json payload{{"type", "request"}, {"request_id", "r1"}, {"action", "ping"},
+                       {"data", {{"text", text}}}};
+    CHECK(parse_request(payload.dump()).data.at("text") == text);
 }
 
 TEST_CASE("Required request fields have explicit types and byte limits", "[protocol]") {

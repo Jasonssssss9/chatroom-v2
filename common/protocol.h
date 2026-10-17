@@ -25,6 +25,7 @@ struct ProtocolError : std::runtime_error {
 };
 
 // Parses JSON and validates the envelope. Operation-specific fields belong to handlers.
+// Allows at most 64 nested objects and arrays, counting the root as level one.
 // Throws ProtocolError for malformed JSON or an invalid request envelope.
 Request parse_request(std::string_view payload);
 

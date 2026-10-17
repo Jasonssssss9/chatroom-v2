@@ -3,6 +3,7 @@
 namespace chatroom {
 namespace {
 using nlohmann::json;
+constexpr int kMaxJsonDepth = 64;
 
 // Keep reflected metadata small, including when reporting an invalid request.
 std::string read_name(const json& message, const char* field) {
@@ -16,7 +17,15 @@ std::string read_name(const json& message, const char* field) {
 } // namespace
 
 Request parse_request(std::string_view payload) {
-    const auto message = json::parse(payload, nullptr, false);
+    const auto check_depth = [](int depth, json::parse_event_t event, json&) {
+        // Container start events use zero-based depth; the root counts as level one.
+        if ((event == json::parse_event_t::object_start ||
+             event == json::parse_event_t::array_start) && depth >= kMaxJsonDepth) {
+            throw ProtocolError("invalid_request", "JSON nesting exceeds the 64-level limit");
+        }
+        return true;
+    };
+    const auto message = json::parse(payload, check_depth, false);
     if (message.is_discarded()) {
         throw ProtocolError("invalid_json", "Payload must contain valid JSON");
     }
