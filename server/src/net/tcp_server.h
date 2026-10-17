@@ -42,6 +42,9 @@ public:
     void defer_close(ConnectionId id);
     void resume_close(ConnectionId id);
 
+    // Reactor-only: closes a connection immediately and invokes its disconnect handler.
+    void close_connection(ConnectionId id, std::string_view reason);
+
     // Wakes the loop and stops it without draining pending output.
     void stop();
 
@@ -57,7 +60,6 @@ private:
     void process_callbacks();
     void handle_event(ConnectionId id, std::uint32_t events);
     void update_connection(ConnectionId id);
-    void close_connection(ConnectionId id, std::string_view reason);
     void cleanup();
 
     Socket listener_;

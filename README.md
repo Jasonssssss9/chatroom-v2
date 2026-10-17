@@ -111,6 +111,12 @@ accepting runs out of descriptors or socket memory, the Reactor retries after
 200 ms while continuing to serve established connections. Choose the connection
 limit with room for other file descriptors; it does not raise the OS limit.
 
+Request admission defaults to 32 unfinished requests per connection and 1024 in
+total. Use `--max-requests-per-connection` and `--max-pending-requests`, or the JSON
+settings, to change them. Exceeding either limit closes that connection and drops
+its waiting requests. Submitted tasks keep their global slots until completion,
+even after disconnect. See [Request Capacity](docs/threading.md#request-capacity).
+
 Each request is a four-byte unsigned payload length in network byte order followed
 by UTF-8 JSON. A request must include `type`, `request_id`, and `action`; `data` is
 an optional object. The server currently supports `ping`. Invalid requests receive

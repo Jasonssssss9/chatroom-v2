@@ -23,6 +23,8 @@ struct ServerConfig {
     std::uint16_t port = 8081;
     std::size_t worker_threads = 4;
     std::size_t max_connections = 1024;
+    std::size_t max_requests_per_connection = 32;
+    std::size_t max_pending_requests = 1024;
     LogLevel log_level = LogLevel::info;
     DatabaseConfig database;
     std::string jwt_secret;

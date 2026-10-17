@@ -3,7 +3,9 @@
     "address": "127.0.0.1",
     "port": 8081,
     "worker_threads": 4,
-    "max_connections": 1024
+    "max_connections": 1024,
+    "max_requests_per_connection": 32,
+    "max_pending_requests": 1024
   },
   "database": {
     "host": "127.0.0.1",

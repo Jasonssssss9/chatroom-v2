@@ -46,15 +46,51 @@ There are four ordinary queues with different jobs:
 | Pending sends | Mutex and eventfd | Transfer serialized output to connection buffers |
 
 The application request queues and completion queue do not need a polling thread.
-Pool submissions wake workers; completions wake the existing Reactor. These queues
-currently have no size limits. The existing frame and connection-output limits
-remain in place; queue backpressure is a separate future step.
+Pool submissions wake workers; completions wake the existing Reactor. Admission
+limits in the dispatcher bound this request pipeline, including pool tasks and
+completions awaiting the Reactor. The existing frame and connection-output limits
+remain in place.
+
+## Request Capacity
+
+The defaults are 32 unfinished requests per connection and 1024 across the server.
+Configure them with `server.max_requests_per_connection` and
+`server.max_pending_requests`, or the corresponding command-line options. Both
+limits must be positive; the global limit may be smaller than the per-connection
+limit. See [Configuration and Logging](configuration.md).
+
+An admitted request keeps one global slot while it is waiting in a connection's
+queue, submitted to the pool, running, or awaiting a Reactor completion. Only the
+Reactor changes this count. Completion releases the slot even if the connection
+has already disappeared.
+
+If either limit is full, the dispatcher logs `request_rejected` and closes the
+offending connection with reason `request_limit`. Its waiting requests are dropped
+and their slots are released immediately. Already submitted tasks retain their
+slots until their completions arrive. Repeatedly disconnecting and reconnecting
+therefore cannot fill the pool with uncounted tasks.
+
+This is an overload-close policy. Pending replies on that connection are not
+guaranteed, and no extra error-response task is queued during overload. The JSON
+envelope and error-code set are unchanged by admission limits.
+
+The dispatcher owns the application's pool and is its only producer, so the pool
+does not need a second capacity policy. The generic `ThreadPool::submit()` and
+`TcpServer::post()`/`send()` APIs have no independent queue limits; other future
+producers must apply their own admission rules. These limits bound request counts,
+not total process memory or the size of arbitrary objects created by handlers.
+
+The network layer returns at most 16 complete frames per receive batch, then lets
+the dispatcher check admission. Full batches are followed by another receive call
+until `EAGAIN` or EOF. This bounds temporary frame collection without leaving data
+waiting for a new ET notification.
 
 ## Ordering
 
-Only one request per connection is submitted at a time. The front queue entry
-remains as an active marker after its payload has been moved into a worker task.
-Incoming requests append behind it. A Reactor completion removes that marker and
+Only one request per connection is submitted at a time. Each connection stores a
+queue of waiting payloads and an `active` flag for its submitted task. Incoming
+requests append to the queue. After successful submission, the payload is removed
+from that queue and belongs to the task. A Reactor completion clears the flag and
 then starts the next request.
 
 For example, if one connection sends A followed by B:
@@ -87,9 +123,10 @@ when the request arrived.
 ## Disconnects and EOF
 
 A disconnect callback erases that connection's application queue. Waiting requests
-are discarded. A task already submitted to the pool may still finish, but its
-completion finds no queue and is ignored. This does not cancel or roll back work
-already performed by a handler.
+are discarded and release their global slots. A task already submitted to the pool
+may still finish. Its completion releases its slot, finds no connection queue, and
+discards the response. This does not cancel or roll back work already performed by
+a handler.
 
 A TCP FIN closes only the peer's sending direction. Clients using piped input still
 need their replies after sending FIN. `RequestDispatcher` therefore calls
@@ -148,6 +185,9 @@ handler proves that another connection can still receive a response, while a
 second request on the blocked connection cannot start early. Other tests cover
 ordered replies after FIN, resets during active work, handler exceptions, shutdown
 with an active task, fixed worker count, and draining the pool queue.
+Capacity tests also cover overload isolation, dropping waiting requests, retaining
+submitted tasks after disconnect, reusing released slots, and errors with a budget
+of one request.
 
 ```bash
 ./build/tests/chatroom_tests "[thread_pool]"

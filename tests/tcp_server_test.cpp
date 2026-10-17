@@ -41,8 +41,10 @@ public:
 
     ~RunningServer() { finish(); }
 
-    void use_workers(RequestDispatcher::Handler handler, std::size_t worker_count = 2) {
-        dispatcher = std::make_unique<RequestDispatcher>(server, std::move(handler), worker_count);
+    void use_workers(RequestDispatcher::Handler handler, std::size_t worker_count = 2,
+                     std::size_t per_connection = 32, std::size_t total = 1024) {
+        dispatcher = std::make_unique<RequestDispatcher>(server, std::move(handler), worker_count,
+                                                          per_connection, total);
         server.set_message_handler([this](ConnectionId id, std::string payload) {
             dispatcher->enqueue(id, std::move(payload));
         });
@@ -129,6 +131,12 @@ std::string receive_frame(int fd) {
     length = ntohl(length);
     REQUIRE(length <= kMaxFrameSize);
     return receive_exact(fd, length);
+}
+
+void expect_closed(int fd) {
+    char byte;
+    const auto count = ::recv(fd, &byte, 1, 0);
+    CHECK((count == 0 || (count < 0 && errno == ECONNRESET)));
 }
 
 // Keep FD-limit changes in a child, and reap it even if a test assertion fails.
@@ -546,6 +554,193 @@ TEST_CASE("Disconnect discards waiting requests and late worker completions",
     CHECK(nlohmann::json::parse(receive_frame(replacement.get()))["request_id"] == "fresh");
     fixture.check();
     CHECK(waiting_executed == 0);
+}
+
+TEST_CASE("Per-connection request limits close only the overloaded client",
+          "[server][dispatcher][limits]") {
+    std::promise<void> started;
+    auto active = started.get_future();
+    std::promise<void> disconnected;
+    auto closed = disconnected.get_future();
+    std::atomic<ConnectionId> old_id{0};
+    std::atomic<int> waiting_executed{0};
+    const RequestHandler handler;
+    RunningServer fixture;
+    TaskGate gate;
+    fixture.use_workers([&, wait = gate.future](ConnectionId id, const Request& request) {
+        if (request.action == "slow") {
+            old_id = id;
+            started.set_value();
+            wait.wait();
+            return make_response(request);
+        }
+        if (request.action == "waiting") ++waiting_executed;
+        return handler.handle(request);
+    }, 2, 2, 64);
+    fixture.server.set_disconnect_handler([&](ConnectionId id) {
+        fixture.dispatcher->disconnect(id);
+        if (id == old_id) disconnected.set_value();
+    });
+    fixture.start();
+    auto client = connect_client(fixture.server.port());
+    send_all(client.get(), encode_frame(R"({"type":"request","request_id":"s","action":"slow"})"));
+    REQUIRE(active.wait_for(2s) == std::future_status::ready);
+    auto burst = encode_frame(R"({"type":"request","request_id":"w","action":"waiting"})");
+    const auto extra = encode_frame(R"({"type":"request","request_id":"extra","action":"ping"})");
+    for (int i = 0; i < 40; ++i) burst += extra;
+    send_all(client.get(), burst);
+    REQUIRE(closed.wait_for(2s) == std::future_status::ready);
+    expect_closed(client.get());
+    auto other = connect_client(fixture.server.port());
+    send_all(other.get(), encode_frame(R"({"type":"request","request_id":"ok","action":"ping"})"));
+    CHECK(nlohmann::json::parse(receive_frame(other.get()))["data"]["pong"] == true);
+    gate.release();
+    fixture.check();
+    CHECK(waiting_executed == 0);
+}
+
+TEST_CASE("Disconnect releases waiting requests from the global budget",
+          "[server][dispatcher][limits]") {
+    std::promise<void> started;
+    auto active = started.get_future();
+    std::promise<void> enqueued;
+    auto queued = enqueued.get_future();
+    std::promise<void> disconnected;
+    auto closed = disconnected.get_future();
+    std::atomic<ConnectionId> old_id{0};
+    std::atomic<int> waiting_executed{0};
+    const std::string last = R"({"type":"request","request_id":"w2","action":"waiting"})";
+    const RequestHandler handler;
+    RunningServer fixture;
+    TaskGate gate;
+    fixture.use_workers([&, wait = gate.future](ConnectionId id, const Request& request) {
+        if (request.action == "slow") {
+            old_id = id;
+            started.set_value();
+            wait.wait();
+            return make_response(request);
+        }
+        if (request.action == "waiting") ++waiting_executed;
+        return handler.handle(request);
+    }, 2, 3, 3);
+    fixture.server.set_message_handler([&](ConnectionId id, std::string payload) {
+        const bool final_waiting_request = payload == last;
+        fixture.dispatcher->enqueue(id, std::move(payload));
+        if (final_waiting_request) enqueued.set_value();
+    });
+    fixture.server.set_disconnect_handler([&](ConnectionId id) {
+        fixture.dispatcher->disconnect(id);
+        if (id == old_id) disconnected.set_value();
+    });
+    fixture.start();
+    auto client = connect_client(fixture.server.port());
+    send_all(client.get(), encode_frame(R"({"type":"request","request_id":"s","action":"slow"})"));
+    REQUIRE(active.wait_for(2s) == std::future_status::ready);
+    send_all(client.get(), encode_frame(R"({"type":"request","request_id":"w1","action":"waiting"})") +
+                               encode_frame(last));
+    REQUIRE(queued.wait_for(2s) == std::future_status::ready);
+    const linger reset{1, 0};
+    REQUIRE(::setsockopt(client.get(), SOL_SOCKET, SO_LINGER, &reset, sizeof(reset)) == 0);
+    client.reset();
+    REQUIRE(closed.wait_for(2s) == std::future_status::ready);
+    auto other = connect_client(fixture.server.port());
+    send_all(other.get(), encode_frame(R"({"type":"request","request_id":"ok","action":"ping"})"));
+    CHECK(nlohmann::json::parse(receive_frame(other.get()))["data"]["pong"] == true);
+    gate.release();
+    fixture.check();
+    CHECK(waiting_executed == 0);
+}
+
+TEST_CASE("Disconnected pool tasks retain their global slots until completion",
+          "[server][dispatcher][limits]") {
+    std::promise<void> started;
+    auto active = started.get_future();
+    std::promise<void> enqueued;
+    auto queued = enqueued.get_future();
+    std::promise<void> first_disconnected;
+    auto first_closed = first_disconnected.get_future();
+    std::promise<void> second_disconnected;
+    auto second_closed = second_disconnected.get_future();
+    std::promise<void> completion_applied;
+    auto capacity = completion_applied.get_future();
+    std::atomic<ConnectionId> first_id{0};
+    ConnectionId second_id = 0;
+    const std::string waiting = R"({"type":"request","request_id":"q","action":"queued"})";
+    const RequestHandler handler;
+    RunningServer fixture;
+    TaskGate gate;
+    fixture.use_workers([&, wait = gate.future](ConnectionId id, const Request& request) {
+        if (request.action == "slow") {
+            first_id = id;
+            started.set_value();
+            wait.wait();
+            return make_response(request);
+        }
+        if (request.action == "queued") {
+            // With one worker, the first completion is posted before this task starts.
+            fixture.server.post([&] { completion_applied.set_value(); });
+            return make_response(request);
+        }
+        return handler.handle(request);
+    }, 1, 4, 2);
+    fixture.server.set_message_handler([&](ConnectionId id, std::string payload) {
+        const bool pool_task = payload == waiting;
+        if (pool_task) second_id = id;
+        fixture.dispatcher->enqueue(id, std::move(payload));
+        if (pool_task) enqueued.set_value();
+    });
+    fixture.server.set_disconnect_handler([&](ConnectionId id) {
+        fixture.dispatcher->disconnect(id);
+        if (id == first_id) first_disconnected.set_value();
+        else if (id == second_id) second_disconnected.set_value();
+    });
+    fixture.start();
+    auto first = connect_client(fixture.server.port());
+    send_all(first.get(), encode_frame(R"({"type":"request","request_id":"s","action":"slow"})"));
+    REQUIRE(active.wait_for(2s) == std::future_status::ready);
+    auto second = connect_client(fixture.server.port());
+    send_all(second.get(), encode_frame(waiting));
+    REQUIRE(queued.wait_for(2s) == std::future_status::ready);
+    const linger reset{1, 0};
+    REQUIRE(::setsockopt(second.get(), SOL_SOCKET, SO_LINGER, &reset, sizeof(reset)) == 0);
+    second.reset();
+    REQUIRE(second_closed.wait_for(2s) == std::future_status::ready);
+    REQUIRE(::setsockopt(first.get(), SOL_SOCKET, SO_LINGER, &reset, sizeof(reset)) == 0);
+    first.reset();
+    REQUIRE(first_closed.wait_for(2s) == std::future_status::ready);
+
+    auto rejected = connect_client(fixture.server.port());
+    send_all(rejected.get(), encode_frame(R"({"type":"request","request_id":"no","action":"ping"})"));
+    expect_closed(rejected.get());
+    gate.release();
+    REQUIRE(capacity.wait_for(2s) == std::future_status::ready);
+    auto replacement = connect_client(fixture.server.port());
+    send_all(replacement.get(), encode_frame(R"({"type":"request","request_id":"ok","action":"ping"})"));
+    const auto response = nlohmann::json::parse(receive_frame(replacement.get()));
+    CHECK(response["request_id"] == "ok");
+    CHECK(response["data"]["pong"] == true);
+    fixture.check();
+}
+
+TEST_CASE("Error completions release request capacity for later requests",
+          "[server][dispatcher][limits]") {
+    const RequestHandler handler;
+    RunningServer fixture;
+    fixture.use_workers([&](ConnectionId, const Request& request) {
+        if (request.action == "fail") throw std::runtime_error("Expected handler failure");
+        return handler.handle(request);
+    }, 1, 1, 1);
+    fixture.start();
+    auto client = connect_client(fixture.server.port());
+    for (const auto* payload : {"{broken",
+                                R"({"type":"request","request_id":"f","action":"fail"})",
+                                R"({"type":"request","request_id":"u","action":"missing"})"}) {
+        send_all(client.get(), encode_frame(payload));
+        CHECK(nlohmann::json::parse(receive_frame(client.get()))["ok"] == false);
+    }
+    send_all(client.get(), encode_frame(R"({"type":"request","request_id":"ok","action":"ping"})"));
+    CHECK(nlohmann::json::parse(receive_frame(client.get()))["data"]["pong"] == true);
+    fixture.check();
 }
 
 TEST_CASE("A failed worker request does not stall the next request", "[server][dispatcher]") {

@@ -209,9 +209,11 @@ The shorter form is also valid:
 {"type":"request","request_id":"ping-2","action":"ping"}
 ```
 
-The server returns one response for each request. Multiple requests can use the
-same TCP connection. The client displays responses with a `<` prefix; that prefix
-is not part of the wire message.
+Each admitted request normally produces one response. Multiple requests can use
+the same TCP connection. If a request-capacity limit is exceeded, the server closes
+the connection and may discard pending replies; it does not queue an extra error
+response. See [Request Capacity](threading.md#request-capacity). The client displays
+responses with a `<` prefix; that prefix is not part of the wire message.
 
 ## 5. Current Errors and Connection Behavior
 

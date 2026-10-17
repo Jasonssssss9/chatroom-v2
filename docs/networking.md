@@ -54,8 +54,8 @@ notification. Another resource failure schedules another delayed attempt.
 
 During a resource pause, new clients may wait in the kernel backlog even if their
 TCP connect succeeds. They can exchange application data after accepting recovers.
-The connection limit and resource retry handle connection admission; request queue
-limits remain a separate step.
+The connection limit and resource retry handle connection admission. Application
+request admission is handled by the [dispatcher limits](threading.md#request-capacity).
 
 ## Framing and Limits
 
@@ -65,7 +65,15 @@ bytes, including empty payloads and embedded zero bytes; the application validat
 JSON separately.
 
 The decoder accepts fragmented headers, fragmented payloads, and multiple frames
-in one receive. Consuming a frame never discards trailing input. Each connection
+in one receive. `TcpConnection::receive()` returns at most 16 frames at a time.
+After a full batch, the Reactor calls it again immediately, processing frames
+already in the decoder before reading more bytes. It continues until `EAGAIN` or
+EOF, allowing request limits to be checked between batches. If a message callback
+closes the connection, the Reactor discards the rest of that batch and stops reading
+it. A direct caller of `receive()` must also drain full batches before waiting for
+another readiness event.
+
+Consuming a frame never discards trailing input. Each connection
 limits its unsent output buffer to 1 MiB; exceeding that limit closes the connection.
 `EPOLLOUT` is enabled only while output remains buffered.
 
@@ -90,6 +98,10 @@ dispatcher guarantees this for requests on one connection.
 Callbacks execute on the Reactor and must not perform blocking work. Captured
 objects must outlive the event loop. Application completions use this API to look
 up the connection ID again and advance the corresponding request queue.
+
+`close_connection(id, reason)` is Reactor-only. It removes the connection and
+invokes the disconnect handler immediately. The dispatcher uses it for overload
+cleanup; worker threads must not call it.
 
 ## Connection and Server Shutdown
 

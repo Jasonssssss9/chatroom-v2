@@ -15,10 +15,12 @@ using ConnectionId = std::uint64_t;
 class TcpConnection {
 public:
     static constexpr std::size_t kMaxPendingBytes = 1024 * 1024;
+    static constexpr std::size_t kReceiveBatchSize = 16;
 
     TcpConnection(Socket socket, std::string peer_address);
 
-    // Reads until EAGAIN or EOF, returning every complete frame received.
+    // Returns at most kReceiveBatchSize frames. A full batch requires another call
+    // to drain buffered frames and socket input before waiting for an ET event.
     std::vector<std::string> receive();
 
     // Appends an already encoded frame; returns false if the output limit is exceeded.

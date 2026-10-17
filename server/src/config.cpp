@@ -80,6 +80,15 @@ void read_file(ServerConfig& config, const std::string& path) {
         config.max_connections = read_number(server.at("max_connections"), "server.max_connections",
                                              1, std::numeric_limits<std::size_t>::max());
     }
+    if (server.contains("max_requests_per_connection")) {
+        config.max_requests_per_connection = read_number(
+            server.at("max_requests_per_connection"), "server.max_requests_per_connection",
+            1, std::numeric_limits<std::size_t>::max());
+    }
+    if (server.contains("max_pending_requests")) {
+        config.max_pending_requests = read_number(server.at("max_pending_requests"),
+            "server.max_pending_requests", 1, std::numeric_limits<std::size_t>::max());
+    }
     const auto database = section(document, "database");
     if (database.contains("host")) config.database.host = read_text(database.at("host"), "database.host");
     if (database.contains("port")) {
@@ -110,7 +119,9 @@ ServerConfig load_config(const std::vector<std::string_view>& arguments) {
     for (std::size_t i = 0; i < arguments.size(); i += 2) {
         const auto option = arguments[i];
         if (option != "--config" && option != "--address" && option != "--port" &&
-            option != "--workers" && option != "--max-connections" && option != "--log-level") {
+            option != "--workers" && option != "--max-connections" &&
+            option != "--max-requests-per-connection" && option != "--max-pending-requests" &&
+            option != "--log-level") {
             throw std::invalid_argument("Unknown option: " + std::string(option));
         }
         if (i + 1 == arguments.size()) {
@@ -135,6 +146,14 @@ ServerConfig load_config(const std::vector<std::string_view>& arguments) {
         if (option == "--max-connections") {
             config.max_connections = parse_number(value, "--max-connections", 1,
                                                    std::numeric_limits<std::size_t>::max());
+        }
+        if (option == "--max-requests-per-connection") {
+            config.max_requests_per_connection = parse_number(value, "--max-requests-per-connection",
+                                                               1, std::numeric_limits<std::size_t>::max());
+        }
+        if (option == "--max-pending-requests") {
+            config.max_pending_requests = parse_number(value, "--max-pending-requests", 1,
+                                                       std::numeric_limits<std::size_t>::max());
         }
         if (option == "--log-level") config.log_level = parse_log_level(value);
     }

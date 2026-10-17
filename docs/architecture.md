@@ -45,7 +45,9 @@ built without the server. See [Networking](networking.md), [JSON Protocol](proto
 and [Worker Pool and Request Handoff](threading.md).
 
 JSON configuration and command-line options control the bind address, port, worker
-count, connection limit, and log level. The Reactor pauses and retries accepting
+count, connection and request limits, and log level. The dispatcher limits
+unfinished requests, retaining submitted tasks in the global count after disconnect.
+The Reactor pauses and retries accepting
 when descriptors or socket memory are exhausted, while serving existing clients.
 Database settings and JWT secrets can be supplied through
 environment variables. Startup, connections, and request failures use a shared

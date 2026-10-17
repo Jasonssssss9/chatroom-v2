@@ -38,13 +38,15 @@ fields are ignored. The root and each supplied section must be JSON objects.
 | `server.port` | `8081` | TCP port, from 0 to 65535; 0 requests an available port |
 | `server.worker_threads` | `4` | Positive integer number of worker threads |
 | `server.max_connections` | `1024` | Positive integer limit on active TCP connections |
+| `server.max_requests_per_connection` | `32` | Positive integer limit on unfinished requests per connection |
+| `server.max_pending_requests` | `1024` | Positive integer limit on unfinished requests across all connections |
 | `database.host` | `127.0.0.1` | MySQL host name or address |
 | `database.port` | `3306` | MySQL port, from 1 to 65535 |
 | `database.name` | `chatroom` | Database name |
 | `database.user` | `chatroom` | Database user |
 | `log.level` | `info` | Minimum severity: `debug`, `info`, `warn`, or `error` |
 
-Server and database ports, the worker count, and the connection limit must be JSON
+Server and database ports, the worker count, and all capacity limits must be JSON
 integers, not strings or floating-point numbers. Addresses, database names, and user names must be
 non-empty strings. Invalid input stops startup with an error instead of silently
 falling back to a default.
@@ -58,6 +60,8 @@ falling back to a default.
 | `--port NUMBER` | Override `server.port` |
 | `--workers NUMBER` | Override `server.worker_threads` |
 | `--max-connections NUMBER` | Override `server.max_connections` |
+| `--max-requests-per-connection NUMBER` | Override `server.max_requests_per_connection` |
+| `--max-pending-requests NUMBER` | Override `server.max_pending_requests` |
 | `--log-level LEVEL` | Override `log.level` |
 | `--help` | Show usage and exit |
 
@@ -71,6 +75,11 @@ port. The `server_started` log reports the actual port.
 The connection limit does not reserve or raise file-descriptor limits. Leave room
 for other descriptors when choosing it. See [Networking](networking.md#accept-errors-and-connection-capacity)
 for rejection and resource-recovery behavior.
+
+Request limits include submitted tasks and completions waiting for the Reactor.
+Exceeding either request limit closes the client connection. Disconnecting drops
+waiting requests but does not release a submitted task's slot early. See
+[Request Capacity](threading.md#request-capacity) for accounting and overload behavior.
 
 ## Database and JWT Environment Variables
 
@@ -111,21 +120,22 @@ to keep Reactor and worker records from interleaving. Timestamps use UTC with
 millisecond precision.
 
 ```json
-{"timestamp":"2026-10-16T12:00:00.000Z","level":"info","event":"server_started","context":{"address":"127.0.0.1","port":8081,"worker_threads":4,"max_connections":1024}}
+{"timestamp":"2026-10-16T12:00:00.000Z","level":"info","event":"server_started","context":{"address":"127.0.0.1","port":8081,"worker_threads":4,"max_connections":1024,"max_requests_per_connection":32,"max_pending_requests":1024}}
 {"timestamp":"2026-10-16T12:00:01.000Z","level":"info","event":"connection_opened","context":{"connection_id":2,"peer":"127.0.0.1:45000"}}
 {"timestamp":"2026-10-16T12:00:01.010Z","level":"warn","event":"request_error","context":{"connection_id":2,"request_id":"r1","action":"missing","code":"unknown_action","error":"Action is not supported"}}
 ```
 
 | Event | Level | Useful context |
 | --- | --- | --- |
-| `server_starting` | `info` | Requested bind address, port, worker count, and connection limit |
-| `server_started` | `info` | Actual port, worker count, and connection limit after successful setup |
+| `server_starting` | `info` | Requested bind address, port, worker count, and capacity limits |
+| `server_started` | `info` | Actual port, worker count, and capacity limits after successful setup |
 | `server_failed` | `error` | Startup or runtime phase and exception details |
 | `server_stopped` | `info` | The event loop returned normally |
 | `connection_opened` | `info` | Connection ID and peer IP/port |
 | `connection_closed` | `info` | Connection ID, peer IP/port, and close reason |
 | `connection_error` | `warn` | Connection ID and socket, framing, or callback error |
 | `connection_rejected` | `warn` | Peer, connection-limit reason, and configured limit |
+| `request_rejected` | `warn` | Connection ID, limit reason, current request counts, and configured limits |
 | `accept_paused` | `warn` | Resource error number, details, and retry delay |
 | `accept_retry` | `debug` | A scheduled attempt to resume accepting connections |
 | `request_error` | `warn` or `error` | Connection ID, valid request metadata, error code and details |

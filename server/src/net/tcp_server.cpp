@@ -211,21 +211,26 @@ void TcpServer::handle_event(ConnectionId id, std::uint32_t events) {
     if (it == connections_.end()) {
         return;
     }
-    auto& connection = it->second;
     if (events & EPOLLERR) {
         int error = 0;
         socklen_t size = sizeof(error);
-        if (::getsockopt(connection.fd(), SOL_SOCKET, SO_ERROR, &error, &size) < 0) {
+        if (::getsockopt(it->second.fd(), SOL_SOCKET, SO_ERROR, &error, &size) < 0) {
             throw std::system_error(errno, std::generic_category(), "getsockopt(SO_ERROR)");
         }
         throw std::system_error(error == 0 ? EIO : error, std::generic_category(), "socket error");
     }
     if (events & (EPOLLIN | EPOLLRDHUP | EPOLLHUP)) {
-        auto frames = connection.receive();
-        for (auto& frame : frames) {
-            if (on_message_) {
-                on_message_(id, std::move(frame));
+        while (true) {
+            auto frames = it->second.receive();
+            for (auto& frame : frames) {
+                if (on_message_) {
+                    on_message_(id, std::move(frame));
+                }
+                // A request limit can close the connection from the message callback.
+                it = connections_.find(id);
+                if (it == connections_.end()) return;
             }
+            if (frames.size() < TcpConnection::kReceiveBatchSize) break;
         }
         // Apply synchronous replies before closing a peer that sent its final data and FIN.
         process_sends();

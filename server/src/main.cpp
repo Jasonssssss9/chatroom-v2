@@ -17,6 +17,8 @@ int main(int argc, char* argv[]) {
                      "  --port NUMBER       TCP port, 0 selects an available port (default: 8081)\n"
                      "  --workers NUMBER    Worker thread count (default: 4)\n"
                      "  --max-connections N Maximum active connections (default: 1024)\n"
+                     "  --max-requests-per-connection N  Unfinished requests per client (default: 32)\n"
+                     "  --max-pending-requests N         Unfinished requests in total (default: 1024)\n"
                      "  --log-level LEVEL   debug, info, warn, or error (default: info)\n"
                      "  --help              Show this help\n";
         return 0;
@@ -30,13 +32,15 @@ int main(int argc, char* argv[]) {
         chatroom::log(chatroom::LogLevel::info, "server_starting",
                       {{"address", config.address}, {"port", config.port},
                        {"worker_threads", config.worker_threads},
-                       {"max_connections", config.max_connections}});
+                       {"max_connections", config.max_connections},
+                       {"max_requests_per_connection", config.max_requests_per_connection},
+                       {"max_pending_requests", config.max_pending_requests}});
         chatroom::RequestHandler handler;
         chatroom::TcpServer server(config.port, config.address, config.max_connections);
         chatroom::RequestDispatcher dispatcher(
             server, [&handler](chatroom::ConnectionId, const chatroom::Request& request) {
                 return handler.handle(request);
-            }, config.worker_threads);
+            }, config.worker_threads, config.max_requests_per_connection, config.max_pending_requests);
         server.set_message_handler([&](chatroom::ConnectionId id, std::string payload) {
             dispatcher.enqueue(id, std::move(payload));
         });
@@ -44,7 +48,9 @@ int main(int argc, char* argv[]) {
         chatroom::log(chatroom::LogLevel::info, "server_started",
                       {{"address", config.address}, {"port", server.port()},
                        {"worker_threads", config.worker_threads},
-                       {"max_connections", config.max_connections}});
+                       {"max_connections", config.max_connections},
+                       {"max_requests_per_connection", config.max_requests_per_connection},
+                       {"max_pending_requests", config.max_pending_requests}});
         phase = "runtime";
         server.run();
         chatroom::log(chatroom::LogLevel::info, "server_stopped");

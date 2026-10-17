@@ -2,6 +2,7 @@
 #include "framing.h"
 #include "logger.h"
 
+#include <stdexcept>
 #include <utility>
 
 namespace chatroom {
@@ -25,31 +26,62 @@ void log_request_error(ConnectionId id, const Request& request,
 }
 } // namespace
 
-RequestDispatcher::RequestDispatcher(TcpServer& server, Handler handler, std::size_t worker_count)
-    : server_(server), handler_(std::move(handler)), workers_(worker_count) {}
+RequestDispatcher::RequestDispatcher(TcpServer& server, Handler handler, std::size_t worker_count,
+                                     std::size_t max_requests_per_connection,
+                                     std::size_t max_pending_requests)
+    : server_(server), handler_(std::move(handler)),
+      max_requests_per_connection_(max_requests_per_connection),
+      max_pending_requests_(max_pending_requests), workers_(worker_count) {
+    if (max_requests_per_connection_ == 0 || max_pending_requests_ == 0) {
+        throw std::invalid_argument("Request limits must be positive");
+    }
+}
 
 void RequestDispatcher::enqueue(ConnectionId id, std::string payload) {
-    auto& queue = requests_[id];
-    const bool idle = queue.empty();
-    queue.push(std::move(payload));
-    if (idle) {
+    const auto it = requests_.find(id);
+    const auto connection_requests = it == requests_.end()
+        ? 0 : it->second.waiting.size() + (it->second.active ? 1 : 0);
+    if (connection_requests >= max_requests_per_connection_ ||
+        pending_requests_ >= max_pending_requests_) {
+        log(LogLevel::warn, "request_rejected",
+            {{"connection_id", id},
+             {"reason", connection_requests >= max_requests_per_connection_
+                            ? "connection_request_limit" : "global_request_limit"},
+             {"connection_requests", connection_requests}, {"pending_requests", pending_requests_},
+             {"max_requests_per_connection", max_requests_per_connection_},
+             {"max_pending_requests", max_pending_requests_}});
+        server_.close_connection(id, "request_limit");
+        return;
+    }
+    auto& state = requests_[id];
+    state.waiting.push(std::move(payload));
+    ++pending_requests_;
+    if (!state.active) {
         server_.defer_close(id);
         start_next(id);
     }
 }
 
 void RequestDispatcher::disconnect(ConnectionId id) {
-    requests_.erase(id);
+    const auto it = requests_.find(id);
+    if (it != requests_.end()) {
+        // A submitted task keeps its slot even after the connection disappears.
+        pending_requests_ -= it->second.waiting.size();
+        requests_.erase(it);
+    }
 }
 
 void RequestDispatcher::start_next(ConnectionId id) {
-    auto payload = std::move(requests_.at(id).front());
+    auto& state = requests_.at(id);
+    auto payload = std::move(state.waiting.front());
     workers_.submit([this, id, payload = std::move(payload)] {
         auto response = process(id, payload);
         server_.post([this, id, response = std::move(response)]() mutable {
             complete(id, std::move(response));
         });
     });
+    state.waiting.pop();
+    state.active = true;
 }
 
 std::string RequestDispatcher::process(ConnectionId id, std::string_view payload) const {
@@ -84,13 +116,14 @@ std::string RequestDispatcher::process(ConnectionId id, std::string_view payload
 }
 
 void RequestDispatcher::complete(ConnectionId id, std::string response) {
+    --pending_requests_;
     auto it = requests_.find(id);
     if (it == requests_.end()) {
         return;
     }
+    it->second.active = false;
     server_.send(id, response);
-    it->second.pop();
-    if (it->second.empty()) {
+    if (it->second.waiting.empty()) {
         requests_.erase(it);
         server_.resume_close(id);
     } else {

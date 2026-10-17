@@ -49,6 +49,28 @@ TEST_CASE("A connection returns complete messages received before EOF", "[net]")
     CHECK(connection.read_closed());
 }
 
+TEST_CASE("Receive batches bound temporary storage and preserve buffered frames", "[net]") {
+    auto pair = socket_pair();
+    TcpConnection connection(Socket(std::move(pair[0])), "local");
+    std::string bytes;
+    constexpr int message_count = 50;
+    for (int i = 0; i < message_count; ++i) bytes += encode_frame(std::to_string(i));
+    REQUIRE(::send(pair[1].get(), bytes.data(), bytes.size(), MSG_NOSIGNAL) ==
+            static_cast<ssize_t>(bytes.size()));
+    REQUIRE(::shutdown(pair[1].get(), SHUT_WR) == 0);
+    int received = 0;
+    for (int pass = 0; pass < message_count && !connection.read_closed(); ++pass) {
+        const auto frames = connection.receive();
+        REQUIRE(frames.size() <= TcpConnection::kReceiveBatchSize);
+        for (const auto& frame : frames) {
+            CHECK(frame == std::to_string(received));
+            ++received;
+        }
+    }
+    CHECK(received == message_count);
+    CHECK(connection.read_closed());
+}
+
 TEST_CASE("A connection retains partial output until its peer reads", "[net]") {
     auto pair = socket_pair();
     const int capacity = 4096;

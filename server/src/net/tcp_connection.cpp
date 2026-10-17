@@ -14,12 +14,15 @@ std::vector<std::string> TcpConnection::receive() {
     std::vector<std::string> frames;
     char buffer[8192];
     while (true) {
+        while (auto frame = decoder_.next()) {
+            frames.push_back(std::move(*frame));
+            if (frames.size() == kReceiveBatchSize) {
+                return frames;
+            }
+        }
         const auto count = socket_.receive(buffer, sizeof(buffer));
         if (count > 0) {
             decoder_.append(std::string_view(buffer, static_cast<std::size_t>(count)));
-            while (auto frame = decoder_.next()) {
-                frames.push_back(std::move(*frame));
-            }
         } else if (count == 0) {
             read_closed_ = true;
             return frames;
