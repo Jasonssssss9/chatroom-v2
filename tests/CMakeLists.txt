@@ -1,11 +1,11 @@
-add_executable(chatroom_tests framing_test.cpp protocol_test.cpp)
+add_executable(chatroom_tests framing_test.cpp protocol_test.cpp logger_test.cpp)
 target_link_libraries(chatroom_tests PRIVATE chatroom_common Catch2::Catch2WithMain)
 target_compile_options(chatroom_tests PRIVATE -Wall -Wextra -Wpedantic)
 
 if(BUILD_SERVER)
     target_sources(chatroom_tests PRIVATE
         tcp_connection_test.cpp tcp_server_test.cpp request_handler_test.cpp
-        thread_pool_test.cpp
+        thread_pool_test.cpp config_test.cpp
     )
     target_link_libraries(chatroom_tests PRIVATE chatroom_net chatroom_app)
 endif()

@@ -1,8 +1,8 @@
 #include "net/tcp_server.h"
+#include "logger.h"
 
 #include <array>
 #include <cerrno>
-#include <iostream>
 #include <stdexcept>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
@@ -124,6 +124,8 @@ void TcpServer::accept_connections() {
             connections_.erase(it);
             throw;
         }
+        log(LogLevel::info, "connection_opened",
+            {{"connection_id", id}, {"peer", it->second.peer_address()}});
     }
 }
 
@@ -145,8 +147,9 @@ void TcpServer::process_sends() {
                 it->second.flush();
                 updated.push_back(pending.id);
             } catch (const std::exception& error) {
-                std::cerr << "Connection " << pending.id << ": " << error.what() << '\n';
-                close_connection(pending.id);
+                log(LogLevel::warn, "connection_error",
+                    {{"connection_id", pending.id}, {"error", error.what()}});
+                close_connection(pending.id, "error");
             }
         }
         sends.pop();
@@ -156,8 +159,9 @@ void TcpServer::process_sends() {
         try {
             update_connection(id);
         } catch (const std::exception& error) {
-            std::cerr << "Connection " << id << ": " << error.what() << '\n';
-            close_connection(id);
+            log(LogLevel::warn, "connection_error",
+                {{"connection_id", id}, {"error", error.what()}});
+            close_connection(id, "error");
         }
     }
 }
@@ -205,19 +209,21 @@ void TcpServer::update_connection(ConnectionId id) {
     }
     if (it->second.read_closed() && !it->second.close_deferred() &&
         !it->second.has_pending_output()) {
-        close_connection(id);
+        close_connection(id, "peer_closed");
         return;
     }
     epoll_.modify(it->second.fd(), id, it->second.events());
 }
 
-void TcpServer::close_connection(ConnectionId id) {
+void TcpServer::close_connection(ConnectionId id, std::string_view reason) {
     // Extraction keeps the socket owned even if removing it from epoll fails.
     auto connection = connections_.extract(id);
     if (connection.empty()) {
         return;
     }
     epoll_.remove(connection.mapped().fd());
+    log(LogLevel::info, "connection_closed",
+        {{"connection_id", id}, {"peer", connection.mapped().peer_address()}, {"reason", reason}});
     if (on_disconnect_) {
         on_disconnect_(id);
     }
@@ -249,8 +255,9 @@ void TcpServer::run() {
                     try {
                         handle_event(id, events[i].events);
                     } catch (const std::exception& error) {
-                        std::cerr << "Connection " << id << ": " << error.what() << '\n';
-                        close_connection(id);
+                        log(LogLevel::warn, "connection_error",
+                            {{"connection_id", id}, {"error", error.what()}});
+                        close_connection(id, "error");
                     }
                 }
             }
@@ -265,7 +272,7 @@ void TcpServer::run() {
 void TcpServer::cleanup() {
     stopped_ = true;
     while (!connections_.empty()) {
-        close_connection(connections_.begin()->first);
+        close_connection(connections_.begin()->first, "server_stopped");
     }
     std::lock_guard<std::mutex> lock(queue_mutex_);
     pending_sends_ = {};

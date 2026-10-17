@@ -11,8 +11,8 @@
 - Keep the server and command-line client in the same repository and build them
   as separate executables.
 - Keep their implementations in `server/src/` and `client/src/`. Shared code in
-  `common/` contains the protocol, framing, and small resource utilities; neither component links to the
-  other's implementation.
+  `common/` contains the protocol, framing, logging, and small resource utilities;
+  neither component links to the other's implementation.
 - Configure component-specific dependencies in each component's `CMakeLists.txt`.
   Use `BUILD_SERVER` and `BUILD_CLIENT` to select which components to build.
 
@@ -36,13 +36,18 @@ discard duplicates using message IDs. Unacknowledged messages can be delivered a
 
 The server network layer implements non-blocking IPv4 TCP, an epoll ET Reactor,
 message framing, buffered writes, and cross-thread sends through an eventfd-backed
-queue. A four-worker pool parses and handles requests, with per-connection ordering
-and completions returned to the Reactor. The executable implements `ping` and
+queue. A configurable pool (four workers by default) parses and handles requests,
+with per-connection ordering and completions returned to the Reactor. The executable implements `ping` and
 correlated protocol errors. Catch2 covers framing, request validation, handlers,
 connection I/O, and TCP integration. The command-line client uses a blocking TCP
 connection with separate input and receive threads. Its library and tests can be
 built without the server. See [Networking](networking.md), [JSON Protocol](protocol.md),
 and [Worker Pool and Request Handoff](threading.md).
+
+JSON configuration and command-line options control the bind address, port, worker
+count, and log level. Database settings and JWT secrets can be supplied through
+environment variables. Startup, connections, and request failures use a shared
+JSON logger. See [Configuration and Logging](configuration.md).
 
 HTTP, JWT, MySQL, and password hashing have not been
 implemented yet. Their dependencies will be added as needed.

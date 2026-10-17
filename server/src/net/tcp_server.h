@@ -54,7 +54,7 @@ private:
     void process_callbacks();
     void handle_event(ConnectionId id, std::uint32_t events);
     void update_connection(ConnectionId id);
-    void close_connection(ConnectionId id);
+    void close_connection(ConnectionId id, std::string_view reason);
     void cleanup();
 
     Socket listener_;

@@ -1,6 +1,6 @@
 #include "thread_pool.h"
+#include "logger.h"
 
-#include <iostream>
 #include <stdexcept>
 #include <utility>
 
@@ -48,9 +48,9 @@ void ThreadPool::work() {
         try {
             task();
         } catch (const std::exception& error) {
-            std::cerr << "Worker task failed: " << error.what() << '\n';
+            log(LogLevel::error, "worker_task_failed", {{"error", error.what()}});
         } catch (...) {
-            std::cerr << "Worker task failed with an unknown exception\n";
+            log(LogLevel::error, "worker_task_failed", {{"error", "Unknown exception"}});
         }
     }
 }

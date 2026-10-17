@@ -10,6 +10,7 @@ target_compile_definitions(chatroom_net PRIVATE _GNU_SOURCE)
 target_compile_options(chatroom_net PRIVATE -Wall -Wextra -Wpedantic)
 
 add_library(chatroom_app
+    src/config.cpp
     src/request_handler.cpp
     src/request_dispatcher.cpp
     src/thread_pool.cpp

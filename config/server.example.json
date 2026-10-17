@@ -1,0 +1,16 @@
+{
+  "server": {
+    "address": "127.0.0.1",
+    "port": 8081,
+    "worker_threads": 4
+  },
+  "database": {
+    "host": "127.0.0.1",
+    "port": 3306,
+    "name": "chatroom",
+    "user": "chatroom"
+  },
+  "log": {
+    "level": "info"
+  }
+}

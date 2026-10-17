@@ -1,9 +1,28 @@
 #include "request_dispatcher.h"
+#include "logger.h"
 
-#include <iostream>
 #include <utility>
 
 namespace chatroom {
+namespace {
+// Correlate failures without recording request bodies or future credentials.
+nlohmann::json request_context(ConnectionId id, const Request& request) {
+    return {{"connection_id", id},
+            {"request_id", request.request_id.empty() ? nlohmann::json(nullptr)
+                                                       : nlohmann::json(request.request_id)},
+            {"action", request.action.empty() ? nlohmann::json(nullptr)
+                                               : nlohmann::json(request.action)}};
+}
+
+void log_request_error(ConnectionId id, const Request& request,
+                       std::string_view code, std::string_view message) {
+    auto context = request_context(id, request);
+    context["code"] = code;
+    context["error"] = message;
+    const auto level = code == "internal_error" ? LogLevel::error : LogLevel::warn;
+    log(level, "request_error", std::move(context));
+}
+} // namespace
 
 RequestDispatcher::RequestDispatcher(TcpServer& server, Handler handler, std::size_t worker_count)
     : server_(server), handler_(std::move(handler)), workers_(worker_count) {}
@@ -36,13 +55,23 @@ std::string RequestDispatcher::process(ConnectionId id, std::string_view payload
     Request request;
     try {
         request = parse_request(payload);
-        return handler_(id, request).dump();
+        auto response = handler_(id, request);
+        auto serialized = response.dump();
+        if (!response.value("ok", true)) {
+            const auto& error = response.at("error");
+            log_request_error(id, request, error.at("code").get<std::string>(),
+                              error.at("message").get<std::string>());
+        } else {
+            log(LogLevel::debug, "request_completed", request_context(id, request));
+        }
+        return serialized;
     } catch (const ProtocolError& error) {
+        log_request_error(id, error.request, error.code, error.what());
         return make_error_response(error.request, error.code, error.what()).dump();
     } catch (const std::exception& error) {
-        std::cerr << "Request on connection " << id << " failed: " << error.what() << '\n';
+        log_request_error(id, request, "internal_error", error.what());
     } catch (...) {
-        std::cerr << "Request on connection " << id << " failed with an unknown exception\n";
+        log_request_error(id, request, "internal_error", "Unknown exception");
     }
     return make_error_response(request, "internal_error", "Request processing failed").dump();
 }

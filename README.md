@@ -9,8 +9,10 @@ Uploaded files are stored on disk, with their metadata in MySQL.
 The server and client network layers are implemented. The server accepts JSON
 requests, supports `ping`, and returns structured errors. The command-line client
 sends one JSON request per line.
-Application requests run on four worker threads, in order for each connection,
-and their results return to the Reactor for socket output.
+Application requests run in order for each connection on a configurable worker
+pool (four threads by default). Their results return to the Reactor for socket output.
+JSON configuration, command-line overrides, environment-based credentials, and
+structured server logs are implemented.
 Authentication, chat features, and database access are still planned.
 
 ## Project Layout
@@ -22,7 +24,7 @@ server/
 client/
     CMakeLists.txt   Client build configuration
     src/            Command-line client source code
-common/             JSON protocol, message framing, and file descriptor ownership
+common/             JSON protocol, message framing, logging, and file descriptor ownership
 tests/              Catch2 tests
 cmake/              Shared third-party dependency configuration
 config/             Example configuration files
@@ -35,6 +37,8 @@ See [Architecture](docs/architecture.md) for the design and project conventions,
 for request fields, response examples, errors, and the mapping from v1.
 The [threading guide](docs/threading.md) explains task queues, ownership, ordering,
 and shutdown with active work.
+See [Configuration and Logging](docs/configuration.md) for settings, environment
+variables, startup options, and log fields.
 
 ## Building
 
@@ -52,9 +56,9 @@ The build provides these targets:
 
 | Target | Configuration | Description |
 | --- | --- | --- |
-| `chatroom_common` | `common/CMakeLists.txt` | Shared framing and JSON protocol library |
+| `chatroom_common` | `common/CMakeLists.txt` | Shared framing, JSON protocol, and logging library |
 | `chatroom_net` | `server/CMakeLists.txt` | Server network library |
-| `chatroom_app` | `server/CMakeLists.txt` | Request dispatcher, handlers, and worker pool |
+| `chatroom_app` | `server/CMakeLists.txt` | Configuration, request dispatcher, handlers, and worker pool |
 | `chatroom_server` | `server/CMakeLists.txt` | TCP server with ping and protocol errors |
 | `chatroom_client_net` | `client/CMakeLists.txt` | Blocking TCP client library |
 | `chatroom_client` | `client/CMakeLists.txt` | Command-line JSON client |
@@ -78,7 +82,7 @@ cmake --build build-client -j2
 ```
 
 The server and client run as separate executables and communicate over the
-network. Shared code contains the protocol, framing, and small resource utilities. Each component's
+network. Shared code contains the protocol, framing, logging, and small resource utilities. Each component's
 dependencies belong in its own `CMakeLists.txt`; shared dependencies belong in
 `cmake/Dependencies.cmake`.
 
@@ -89,11 +93,17 @@ modules are implemented.
 
 ```bash
 ./build/server/chatroom_server
-./build/server/chatroom_server 8081 0.0.0.0
+./build/server/chatroom_server --address 0.0.0.0 --port 8081 --workers 4
+cp config/server.example.json config/server.json
+./build/server/chatroom_server --config config/server.json
 ```
 
 The default address is `127.0.0.1:8081`. Port `0` lets the operating system choose
-an available port, which is printed at startup. Use Ctrl+C to terminate the server.
+an available port, which appears in the `server_started` JSON log on standard error.
+Use `--help` to list options and Ctrl+C to terminate the server. Database passwords
+and JWT secrets are read from `CHATROOM_DB_PASSWORD` and `CHATROOM_JWT_SECRET`;
+the current `ping` service does not require them. See the
+[configuration guide](docs/configuration.md) for the full precedence rules.
 
 Each request is a four-byte unsigned payload length in network byte order followed
 by UTF-8 JSON. A request must include `type`, `request_id`, and `action`; `data` is

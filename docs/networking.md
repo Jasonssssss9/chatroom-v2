@@ -23,8 +23,10 @@ on top of this byte-oriented network layer; network tests may use simple echo
 callbacks independently of the application handler.
 
 Startup and epoll failures use `std::system_error`. A connection's read, write,
-framing, or message-handler failure is reported to standard error and closes that
-connection. Disconnect handlers should not throw.
+framing, or message-handler failure is reported as a JSON log on standard error
+and closes that connection. Connection events include the connection ID and peer
+address so request errors can be traced back to a client. Disconnect handlers
+should not throw. See [Configuration and Logging](configuration.md).
 
 ## Framing and Limits
 

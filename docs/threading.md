@@ -2,7 +2,8 @@
 
 The server uses one Reactor thread and a fixed worker pool. Socket I/O remains
 event-driven. JSON parsing, application handlers, and response serialization run
-as worker tasks. The executable currently starts four workers.
+as worker tasks. The executable starts four workers by default; JSON configuration
+or `--workers` can change the fixed pool size. See [Configuration and Logging](configuration.md).
 
 ## Responsibilities
 
