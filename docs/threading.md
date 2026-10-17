@@ -105,6 +105,12 @@ flag keeps an orderly half-close alive; it does not prevent error cleanup.
 Malformed envelopes keep the existing protocol error behavior. They are parsed on
 a worker and still advance the connection's queue after their error response.
 
+The worker checks the serialized handler response against the 64 KiB frame limit.
+An oversized result becomes a correlated `response_too_large` error before it is
+posted to the Reactor. This advances the request queue normally and keeps both
+the connection and the event loop running. The framing library retains its own
+length check for other callers.
+
 An unexpected handler exception is logged and becomes a correlated `internal_error`
 response with the message `Request processing failed`. The next request can then
 run. The pool also catches exceptions from standalone tasks so one throwing task

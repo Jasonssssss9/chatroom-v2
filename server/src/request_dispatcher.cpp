@@ -1,4 +1,5 @@
 #include "request_dispatcher.h"
+#include "framing.h"
 #include "logger.h"
 
 #include <utility>
@@ -57,6 +58,12 @@ std::string RequestDispatcher::process(ConnectionId id, std::string_view payload
         request = parse_request(payload);
         auto response = handler_(id, request);
         auto serialized = response.dump();
+        // Apply the wire limit on a worker before the result reaches the Reactor.
+        if (serialized.size() > kMaxFrameSize) {
+            response = make_error_response(request, "response_too_large",
+                                           "Response exceeds the 64 KiB limit");
+            serialized = response.dump();
+        }
         if (!response.value("ok", true)) {
             const auto& error = response.at("error");
             log_request_error(id, request, error.at("code").get<std::string>(),

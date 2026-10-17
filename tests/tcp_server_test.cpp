@@ -406,6 +406,84 @@ TEST_CASE("A failed worker request does not stall the next request", "[server][d
     fixture.check();
 }
 
+TEST_CASE("Oversized worker responses do not interrupt request processing", "[server][dispatcher]") {
+    std::string text;
+    bool error_response = false;
+    SECTION("Large success response") { text.assign(kMaxFrameSize, 'x'); }
+    SECTION("Escaping makes the serialized response too large") {
+        text.assign(kMaxFrameSize / 2, '\n');
+    }
+    SECTION("Large application error response") {
+        text.assign(kMaxFrameSize, 'x');
+        error_response = true;
+    }
+
+    const RequestHandler handler;
+    RunningServer fixture;
+    fixture.use_workers([&](ConnectionId, const Request& request) {
+        if (request.action == "large") {
+            if (error_response) return make_error_response(request, "test_error", text);
+            return make_response(request, {{"text", text}});
+        }
+        return handler.handle(request);
+    });
+    fixture.start();
+    auto first = connect_client(fixture.server.port());
+    auto second = connect_client(fixture.server.port());
+    send_all(first.get(),
+             encode_frame(R"({"type":"request","request_id":"large-1","action":"large"})") +
+                 encode_frame(R"({"type":"request","request_id":"next","action":"ping"})"));
+    REQUIRE(::shutdown(first.get(), SHUT_WR) == 0);
+    const auto failure = nlohmann::json::parse(receive_frame(first.get()));
+    CHECK(failure["request_id"] == "large-1");
+    CHECK(failure["action"] == "large");
+    CHECK(failure["ok"] == false);
+    CHECK(failure["error"]["code"] == "response_too_large");
+    CHECK(failure["error"]["message"] == "Response exceeds the 64 KiB limit");
+    const auto next = nlohmann::json::parse(receive_frame(first.get()));
+    CHECK(next["request_id"] == "next");
+    CHECK(next["data"]["pong"] == true);
+    char byte;
+    CHECK(::recv(first.get(), &byte, 1, 0) == 0);
+
+    send_all(second.get(),
+             encode_frame(R"({"type":"request","request_id":"other","action":"ping"})"));
+    const auto other = nlohmann::json::parse(receive_frame(second.get()));
+    CHECK(other["request_id"] == "other");
+    CHECK(other["data"]["pong"] == true);
+    fixture.check();
+}
+
+TEST_CASE("Worker responses respect the exact serialized byte limit", "[server][dispatcher]") {
+    std::size_t extra_byte = 0;
+    SECTION("A response of exactly 64 KiB is sent") {}
+    SECTION("A response one byte over the limit is replaced") { extra_byte = 1; }
+
+    RunningServer fixture;
+    fixture.use_workers([extra_byte](ConnectionId, const Request& request) {
+        auto response = make_response(request, {{"text", ""}});
+        const auto envelope_size = response.dump().size();
+        response["data"]["text"] = std::string(kMaxFrameSize - envelope_size + extra_byte, 'x');
+        return response;
+    });
+    fixture.start();
+    auto client = connect_client(fixture.server.port());
+    send_all(client.get(),
+             encode_frame(R"({"type":"request","request_id":"boundary","action":"large"})"));
+    const auto payload = receive_frame(client.get());
+    const auto response = nlohmann::json::parse(payload);
+    CHECK(response["request_id"] == "boundary");
+    if (extra_byte == 0) {
+        CHECK(payload.size() == kMaxFrameSize);
+        CHECK(response["ok"] == true);
+    } else {
+        CHECK(payload.size() < kMaxFrameSize);
+        CHECK(response["ok"] == false);
+        CHECK(response["error"]["code"] == "response_too_large");
+    }
+    fixture.check();
+}
+
 TEST_CASE("Stopping the Reactor before workers finish is safe", "[server][dispatcher]") {
     std::promise<void> started;
     auto active = started.get_future();
