@@ -94,6 +94,7 @@ modules are implemented.
 ```bash
 ./build/server/chatroom_server
 ./build/server/chatroom_server --address 0.0.0.0 --port 8081 --workers 4
+./build/server/chatroom_server --max-connections 512
 cp config/server.example.json config/server.json
 ./build/server/chatroom_server --config config/server.json
 ```
@@ -104,6 +105,11 @@ Use `--help` to list options and Ctrl+C to terminate the server. Database passwo
 and JWT secrets are read from `CHATROOM_DB_PASSWORD` and `CHATROOM_JWT_SECRET`;
 the current `ping` service does not require them. See the
 [configuration guide](docs/configuration.md) for the full precedence rules.
+
+The default active-connection limit is 1024. Excess connections are closed; if
+accepting runs out of descriptors or socket memory, the Reactor retries after
+200 ms while continuing to serve established connections. Choose the connection
+limit with room for other file descriptors; it does not raise the OS limit.
 
 Each request is a four-byte unsigned payload length in network byte order followed
 by UTF-8 JSON. A request must include `type`, `request_id`, and `action`; `data` is

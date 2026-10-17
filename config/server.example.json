@@ -2,7 +2,8 @@
   "server": {
     "address": "127.0.0.1",
     "port": 8081,
-    "worker_threads": 4
+    "worker_threads": 4,
+    "max_connections": 1024
   },
   "database": {
     "host": "127.0.0.1",

@@ -1,6 +1,7 @@
 #include "net/tcp_server.h"
 #include "logger.h"
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <stdexcept>
@@ -13,11 +14,35 @@ namespace chatroom {
 namespace {
 constexpr std::uint64_t kListener = 0;
 constexpr std::uint64_t kWakeup = 1;
+constexpr auto kAcceptRetryDelay = std::chrono::milliseconds(200);
+
+bool retry_accept_error(int error) {
+    // Linux can report a pending connection's network error through accept4().
+    switch (error) {
+    case EINTR:
+    case ECONNABORTED:
+    case ENETDOWN:
+    case EPROTO:
+    case ENOPROTOOPT:
+    case EHOSTDOWN:
+    case ENONET:
+    case EHOSTUNREACH:
+    case EOPNOTSUPP:
+    case ENETUNREACH:
+        return true;
+    default:
+        return false;
+    }
+}
 } // namespace
 
-TcpServer::TcpServer(std::uint16_t port, const std::string& address)
+TcpServer::TcpServer(std::uint16_t port, const std::string& address, std::size_t max_connections)
     : listener_(Socket::listen_on(address, port)),
-      wakeup_fd_(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)) {
+      wakeup_fd_(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)),
+      max_connections_(max_connections) {
+    if (max_connections_ == 0) {
+        throw std::invalid_argument("Maximum connections must be positive");
+    }
     if (wakeup_fd_.get() < 0) {
         throw std::system_error(errno, std::generic_category(), "eventfd");
     }
@@ -107,13 +132,28 @@ void TcpServer::accept_connections() {
         std::string peer;
         auto socket = listener_.accept(peer);
         if (socket.fd() < 0) {
-            if (errno == EINTR || errno == ECONNABORTED) {
+            const int error = errno;
+            if (retry_accept_error(error)) {
                 continue;
             }
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (error == EAGAIN || error == EWOULDBLOCK) {
                 return;
             }
-            throw std::system_error(errno, std::generic_category(), "accept4");
+            if (error == EMFILE || error == ENFILE || error == ENOBUFS || error == ENOMEM) {
+                epoll_.remove(listener_.fd());
+                accept_retry_at_ = std::chrono::steady_clock::now() + kAcceptRetryDelay;
+                log(LogLevel::warn, "accept_paused",
+                    {{"errno", error}, {"error", std::generic_category().message(error)},
+                     {"retry_ms", kAcceptRetryDelay.count()}});
+                return;
+            }
+            throw std::system_error(error, std::generic_category(), "accept4");
+        }
+        if (connections_.size() >= max_connections_) {
+            log(LogLevel::warn, "connection_rejected",
+                {{"peer", peer}, {"reason", "connection_limit"},
+                 {"max_connections", max_connections_}});
+            continue;
         }
 
         const auto id = next_id_++;
@@ -233,11 +273,24 @@ void TcpServer::run() {
     std::array<epoll_event, 64> events;
     try {
         while (!stopped_) {
-            const int count = epoll_.wait(events.data(), static_cast<int>(events.size()));
+            if (accept_retry_at_ && std::chrono::steady_clock::now() >= *accept_retry_at_) {
+                epoll_.add(listener_.fd(), kListener, EPOLLIN | EPOLLET);
+                accept_retry_at_.reset();
+                log(LogLevel::debug, "accept_retry");
+                // Retry explicitly: the pending connection may have no new ET notification.
+                accept_connections();
+            }
+            int timeout_ms = -1;
+            if (accept_retry_at_) {
+                const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(
+                    *accept_retry_at_ - std::chrono::steady_clock::now());
+                timeout_ms = std::max(0, static_cast<int>(remaining.count()));
+            }
+            const int count = epoll_.wait(events.data(), static_cast<int>(events.size()), timeout_ms);
             for (int i = 0; i < count && !stopped_; ++i) {
                 const auto id = events[i].data.u64;
                 if (id == kListener) {
-                    accept_connections();
+                    if (!accept_retry_at_) accept_connections();
                 } else if (id == kWakeup) {
                     std::uint64_t value;
                     ssize_t result;

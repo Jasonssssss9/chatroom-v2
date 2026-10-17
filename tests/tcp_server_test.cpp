@@ -1,4 +1,5 @@
 #include "net/tcp_server.h"
+#include "logger.h"
 #include "request_handler.h"
 #include "request_dispatcher.h"
 #include "task_gate.h"
@@ -8,12 +9,17 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cerrno>
+#include <csignal>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <fcntl.h>
 #include <future>
 #include <memory>
+#include <sys/resource.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
+#include <system_error>
 #include <thread>
 
 using namespace chatroom;
@@ -23,10 +29,11 @@ namespace {
 // Binds before starting the loop, so clients can connect without timing sleeps.
 class RunningServer {
 public:
-    TcpServer server{0};
+    TcpServer server;
     std::unique_ptr<RequestDispatcher> dispatcher;
 
-    RunningServer() {
+    explicit RunningServer(std::size_t max_connections = 1024)
+        : server(0, "127.0.0.1", max_connections) {
         server.set_message_handler([this](ConnectionId id, std::string payload) {
             server.send(id, payload);
         });
@@ -123,7 +130,168 @@ std::string receive_frame(int fd) {
     REQUIRE(length <= kMaxFrameSize);
     return receive_exact(fd, length);
 }
+
+// Keep FD-limit changes in a child, and reap it even if a test assertion fails.
+class ChildProcess {
+public:
+    explicit ChildProcess(pid_t pid) : pid_(pid) {}
+    ~ChildProcess() {
+        if (pid_ > 0) {
+            ::kill(pid_, SIGKILL);
+            while (::waitpid(pid_, nullptr, 0) < 0 && errno == EINTR) {}
+        }
+    }
+
+    int wait() {
+        int status;
+        pid_t result;
+        do { result = ::waitpid(pid_, &status, 0); } while (result < 0 && errno == EINTR);
+        REQUIRE(result == pid_);
+        pid_ = -1;
+        return status;
+    }
+
+private:
+    pid_t pid_;
+};
+
+nlohmann::json await_log(int fd, std::string_view event) {
+    const auto deadline = std::chrono::steady_clock::now() + 3s;
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::string line;
+        char byte;
+        do {
+            byte = receive_exact(fd, 1).front();
+            line += byte;
+        } while (byte != '\n');
+        const auto entry = nlohmann::json::parse(line);
+        if (entry.at("event") == event) return entry;
+    }
+    FAIL("Timed out waiting for log event: " << event);
+    return {};
+}
+
+void run_resource_limited_server() {
+    rlimit limit{};
+    if (::getrlimit(RLIMIT_NOFILE, &limit) < 0) {
+        throw std::system_error(errno, std::generic_category(), "getrlimit");
+    }
+    if (limit.rlim_cur > 64) limit.rlim_cur = 64;
+    if (::setrlimit(RLIMIT_NOFILE, &limit) < 0) {
+        throw std::system_error(errno, std::generic_category(), "setrlimit");
+    }
+    TcpServer server(0);
+    std::vector<UniqueFd> occupied;
+    server.set_message_handler([&](ConnectionId id, std::string payload) {
+        if (payload == "exhaust") {
+            int fd;
+            while ((fd = ::open("/dev/null", O_RDONLY | O_CLOEXEC)) >= 0) {
+                occupied.emplace_back(fd);
+            }
+            if (errno != EMFILE) throw std::runtime_error("Expected EMFILE in test child");
+            server.send(id, "exhausted");
+        } else if (payload == "release") {
+            occupied.clear();
+            server.send(id, "released");
+        } else if (payload == "stop") {
+            server.stop();
+        } else {
+            server.send(id, payload);
+        }
+    });
+    log(LogLevel::info, "test_server_ready", {{"port", server.port()}});
+    server.run();
+    log(LogLevel::info, "test_server_stopped");
+}
 } // namespace
+
+TEST_CASE("Connection limits preserve active clients and allow later connections", "[server]") {
+    std::promise<void> disconnected;
+    auto closed = disconnected.get_future();
+    RunningServer fixture(1);
+    fixture.server.set_disconnect_handler([&, notified = false](ConnectionId) mutable {
+        if (!notified) {
+            notified = true;
+            disconnected.set_value();
+        }
+    });
+    fixture.start();
+    auto first = connect_client(fixture.server.port());
+    send_all(first.get(), encode_frame("accepted"));
+    CHECK(receive_frame(first.get()) == "accepted");
+
+    auto rejected = connect_client(fixture.server.port());
+    char byte;
+    CHECK(::recv(rejected.get(), &byte, 1, 0) == 0);
+    send_all(first.get(), encode_frame("still running"));
+    CHECK(receive_frame(first.get()) == "still running");
+    first.reset();
+    REQUIRE(closed.wait_for(2s) == std::future_status::ready);
+
+    auto replacement = connect_client(fixture.server.port());
+    send_all(replacement.get(), encode_frame("replacement"));
+    CHECK(receive_frame(replacement.get()) == "replacement");
+    fixture.check();
+}
+
+TEST_CASE("FD exhaustion pauses accepting while established connections keep working",
+          "[server][accept]") {
+    bool release_resources = true;
+    SECTION("Accepting recovers for a connection already waiting in the backlog") {}
+    SECTION("Stop wakes the Reactor while accepting is paused") { release_resources = false; }
+
+    int logs[2];
+    REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, logs) == 0);
+    UniqueFd reader(logs[0]);
+    UniqueFd writer(logs[1]);
+    const timeval timeout{2, 0};
+    REQUIRE(::setsockopt(reader.get(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0);
+    const auto pid = ::fork();
+    if (pid == 0) {
+        reader.reset();
+        if (::dup2(writer.get(), STDERR_FILENO) < 0) std::_Exit(2);
+        writer.reset();
+        try {
+            run_resource_limited_server();
+            std::_Exit(0);
+        } catch (const std::exception& error) {
+            log(LogLevel::error, "test_server_failed", {{"error", error.what()}});
+            std::_Exit(1);
+        }
+    }
+    REQUIRE(pid > 0);
+    ChildProcess child(pid);
+    writer.reset();
+    const auto ready = await_log(reader.get(), "test_server_ready");
+    const auto port = ready.at("context").at("port").get<std::uint16_t>();
+    auto existing = connect_client(port);
+    send_all(existing.get(), encode_frame("exhaust"));
+    CHECK(receive_frame(existing.get()) == "exhausted");
+
+    auto waiting = connect_client(port);
+    send_all(waiting.get(), encode_frame("waiting"));
+    const auto paused = await_log(reader.get(), "accept_paused");
+    CHECK(paused.at("context").at("errno") == EMFILE);
+    CHECK(paused.at("context").at("retry_ms") == 200);
+    send_all(existing.get(), encode_frame("still running"));
+    CHECK(receive_frame(existing.get()) == "still running");
+    // A second pause proves that an unsuccessful retry also schedules another attempt.
+    await_log(reader.get(), "accept_paused");
+
+    if (release_resources) {
+        send_all(existing.get(), encode_frame("release"));
+        CHECK(receive_frame(existing.get()) == "released");
+        CHECK(receive_frame(waiting.get()) == "waiting");
+        auto fresh = connect_client(port);
+        send_all(fresh.get(), encode_frame("fresh"));
+        CHECK(receive_frame(fresh.get()) == "fresh");
+    }
+    send_all(existing.get(), encode_frame("stop"));
+    await_log(reader.get(), "test_server_stopped");
+    const int status = child.wait();
+    REQUIRE(WIFEXITED(status));
+    CHECK(WEXITSTATUS(status) == 0);
+}
 
 TEST_CASE("The server echoes framed messages for independent clients", "[server]") {
     RunningServer fixture;

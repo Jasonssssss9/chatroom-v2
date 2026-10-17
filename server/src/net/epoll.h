@@ -16,8 +16,8 @@ public:
     void modify(int fd, std::uint64_t token, std::uint32_t events);
     void remove(int fd);
 
-    // Blocks until events arrive; an interrupted wait returns zero events.
-    int wait(epoll_event* events, int capacity);
+    // A timeout of -1 waits indefinitely. An interrupted wait returns zero events.
+    int wait(epoll_event* events, int capacity, int timeout_ms = -1);
 
 private:
     void control(int operation, int fd, std::uint64_t token, std::uint32_t events);

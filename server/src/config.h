@@ -22,6 +22,7 @@ struct ServerConfig {
     std::string address = "127.0.0.1";
     std::uint16_t port = 8081;
     std::size_t worker_threads = 4;
+    std::size_t max_connections = 1024;
     LogLevel log_level = LogLevel::info;
     DatabaseConfig database;
     std::string jwt_secret;

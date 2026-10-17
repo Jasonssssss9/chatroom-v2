@@ -45,7 +45,9 @@ built without the server. See [Networking](networking.md), [JSON Protocol](proto
 and [Worker Pool and Request Handoff](threading.md).
 
 JSON configuration and command-line options control the bind address, port, worker
-count, and log level. Database settings and JWT secrets can be supplied through
+count, connection limit, and log level. The Reactor pauses and retries accepting
+when descriptors or socket memory are exhausted, while serving existing clients.
+Database settings and JWT secrets can be supplied through
 environment variables. Startup, connections, and request failures use a shared
 JSON logger. See [Configuration and Logging](configuration.md).
 

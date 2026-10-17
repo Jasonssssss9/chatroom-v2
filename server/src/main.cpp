@@ -16,6 +16,7 @@ int main(int argc, char* argv[]) {
                      "  --address IPv4      Bind address (default: 127.0.0.1)\n"
                      "  --port NUMBER       TCP port, 0 selects an available port (default: 8081)\n"
                      "  --workers NUMBER    Worker thread count (default: 4)\n"
+                     "  --max-connections N Maximum active connections (default: 1024)\n"
                      "  --log-level LEVEL   debug, info, warn, or error (default: info)\n"
                      "  --help              Show this help\n";
         return 0;
@@ -28,9 +29,10 @@ int main(int argc, char* argv[]) {
         chatroom::set_log_level(config.log_level);
         chatroom::log(chatroom::LogLevel::info, "server_starting",
                       {{"address", config.address}, {"port", config.port},
-                       {"worker_threads", config.worker_threads}});
+                       {"worker_threads", config.worker_threads},
+                       {"max_connections", config.max_connections}});
         chatroom::RequestHandler handler;
-        chatroom::TcpServer server(config.port, config.address);
+        chatroom::TcpServer server(config.port, config.address, config.max_connections);
         chatroom::RequestDispatcher dispatcher(
             server, [&handler](chatroom::ConnectionId, const chatroom::Request& request) {
                 return handler.handle(request);
@@ -41,7 +43,8 @@ int main(int argc, char* argv[]) {
         server.set_disconnect_handler([&](chatroom::ConnectionId id) { dispatcher.disconnect(id); });
         chatroom::log(chatroom::LogLevel::info, "server_started",
                       {{"address", config.address}, {"port", server.port()},
-                       {"worker_threads", config.worker_threads}});
+                       {"worker_threads", config.worker_threads},
+                       {"max_connections", config.max_connections}});
         phase = "runtime";
         server.run();
         chatroom::log(chatroom::LogLevel::info, "server_stopped");

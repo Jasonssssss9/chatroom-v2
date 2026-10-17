@@ -4,8 +4,10 @@
 #include "net/tcp_connection.h"
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <unordered_map>
 
@@ -19,7 +21,8 @@ public:
     using MessageHandler = std::function<void(ConnectionId, std::string)>;
     using DisconnectHandler = std::function<void(ConnectionId)>;
 
-    explicit TcpServer(std::uint16_t port = 8081, const std::string& address = "127.0.0.1");
+    explicit TcpServer(std::uint16_t port = 8081, const std::string& address = "127.0.0.1",
+                       std::size_t max_connections = 1024);
 
     void set_message_handler(MessageHandler handler);
     void set_disconnect_handler(DisconnectHandler handler);
@@ -61,6 +64,9 @@ private:
     Epoll epoll_;
     UniqueFd wakeup_fd_;
     std::unordered_map<ConnectionId, TcpConnection> connections_;
+    std::size_t max_connections_;
+    // The listener is removed from epoll while a resource-exhaustion retry is pending.
+    std::optional<std::chrono::steady_clock::time_point> accept_retry_at_;
     ConnectionId next_id_ = 2;
     MessageHandler on_message_;
     DisconnectHandler on_disconnect_;

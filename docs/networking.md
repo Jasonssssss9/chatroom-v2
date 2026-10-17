@@ -28,6 +28,35 @@ and closes that connection. Connection events include the connection ID and peer
 address so request errors can be traced back to a client. Disconnect handlers
 should not throw. See [Configuration and Logging](configuration.md).
 
+## Accept Errors and Connection Capacity
+
+The server keeps at most `server.max_connections` active connections, defaulting
+to 1024. A newly accepted socket above that limit is closed immediately and logged
+as `connection_rejected`. Existing clients keep their connections. Rejected sockets
+are never registered with epoll or passed to application handlers.
+
+Choose this limit below the process's available file-descriptor budget. The listener,
+epoll instance, eventfd, standard streams, and future database or file operations
+also need descriptors. The setting does not change the operating system's FD limit.
+
+`EINTR`, aborted connections, and pending network errors from `accept4()` retry the
+accept loop. `EAGAIN` ends the current batch. If `accept4()` reports `EMFILE`,
+`ENFILE`, `ENOBUFS`, or `ENOMEM`, the Reactor records `accept_paused`, removes the
+listener from epoll, and schedules another attempt after 200 ms. Other errors still
+leave `run()` as exceptions.
+
+The Reactor uses an `epoll_wait()` timeout while accepting is paused. It continues
+to process established connections, completions, and `stop()` notifications; it
+does not sleep or start a timer thread. The deadline is checked after every wait,
+including waits that return other events. At the deadline it restores the listener
+and explicitly calls `accept4()` again, so recovery does not depend on a new ET
+notification. Another resource failure schedules another delayed attempt.
+
+During a resource pause, new clients may wait in the kernel backlog even if their
+TCP connect succeeds. They can exchange application data after accepting recovers.
+The connection limit and resource retry handle connection admission; request queue
+limits remain a separate step.
+
 ## Framing and Limits
 
 A frame has a four-byte unsigned length in network byte order followed by exactly
@@ -105,6 +134,12 @@ consecutive messages, UTF-8 byte lengths, embedded zero bytes, frame limits, par
 writes, output limits, disconnected peers, half-close handling, stale replies,
 cross-thread sends, and loop shutdown. Integration tests bind to port `0` and use
 socket timeouts and futures rather than timing sleeps.
+
+Connection-capacity tests verify that excess clients are closed and new clients
+can connect after an active one leaves. FD-exhaustion tests lower `RLIMIT_NOFILE`
+only in an isolated child process. They fill its descriptor table, wait for actual
+pause logs, exercise established I/O and repeated retries, then verify backlog
+recovery and stopping while acceptance remains paused.
 
 Client tests use a raw TCP peer and can run with `BUILD_SERVER=OFF`. They cover
 framed sends, fragmented and consecutive replies, truncated or oversized frames,

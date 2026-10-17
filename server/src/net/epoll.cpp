@@ -34,8 +34,8 @@ void Epoll::remove(int fd) {
     }
 }
 
-int Epoll::wait(epoll_event* events, int capacity) {
-    const int count = ::epoll_wait(fd_.get(), events, capacity, -1);
+int Epoll::wait(epoll_event* events, int capacity, int timeout_ms) {
+    const int count = ::epoll_wait(fd_.get(), events, capacity, timeout_ms);
     if (count < 0) {
         if (errno == EINTR) {
             return 0;
