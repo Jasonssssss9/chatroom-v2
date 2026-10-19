@@ -13,7 +13,10 @@ Application requests run in order for each connection on a configurable worker
 pool (four threads by default). Their results return to the Reactor for socket output.
 JSON configuration, command-line overrides, environment-based credentials, and
 structured server logs are implemented.
-Authentication, chat features, and database access are still planned.
+MySQL connections, prepared statements, transactions, and persistence for users,
+groups, messages, acknowledgments, and file metadata are implemented. The server
+checks database connectivity at startup. Authentication and network chat
+operations are still planned.
 
 ## Project Layout
 
@@ -39,10 +42,14 @@ The [threading guide](docs/threading.md) explains task queues, ownership, orderi
 and shutdown with active work.
 See [Configuration and Logging](docs/configuration.md) for settings, environment
 variables, startup options, and log fields.
+See [MySQL Persistence](docs/database.md) for setup, schema, database operations,
+connection ownership, and integration tests.
 
 ## Building
 
 Requirements: Linux, a C++17 compiler, CMake 3.20 or later, and Git.
+Building the server also requires pkg-config and the MySQL client development
+library (`sudo apt install pkg-config libmysqlclient-dev` on Ubuntu).
 The first configuration requires access to GitHub to download pinned versions of
 nlohmann/json and Catch2.
 
@@ -59,10 +66,12 @@ The build provides these targets:
 | `chatroom_common` | `common/CMakeLists.txt` | Shared framing, JSON protocol, and logging library |
 | `chatroom_net` | `server/CMakeLists.txt` | Server network library |
 | `chatroom_app` | `server/CMakeLists.txt` | Configuration, request dispatcher, handlers, and worker pool |
+| `chatroom_db` | `server/CMakeLists.txt` | MySQL connections, transactions, and chat persistence |
 | `chatroom_server` | `server/CMakeLists.txt` | TCP server with ping and protocol errors |
 | `chatroom_client_net` | `client/CMakeLists.txt` | Blocking TCP client library |
 | `chatroom_client` | `client/CMakeLists.txt` | Command-line JSON client |
 | `chatroom_tests` | `tests/CMakeLists.txt` | Catch2 tests, automatically registered with CTest |
+| `chatroom_database_tests` | `tests/CMakeLists.txt` | Optional MySQL integration tests (`BUILD_DATABASE_TESTS=ON`) |
 
 To build without tests or the Catch2 dependency:
 
@@ -86,12 +95,18 @@ network. Shared code contains the protocol, framing, logging, and small resource
 dependencies belong in its own `CMakeLists.txt`; shared dependencies belong in
 `cmake/Dependencies.cmake`.
 
-Dependencies for HTTP, JWT, MySQL, and password hashing will be added as their
+Dependencies for HTTP, JWT, and password hashing will be added as their
 modules are implemented.
 
 ## Running the Server
 
+Set up MySQL and import `sql/schema.sql` as described in the
+[database guide](docs/database.md), then supply the password in the current shell:
+
 ```bash
+read -r -s -p 'Database password: ' CHATROOM_DB_PASSWORD
+printf '\n'
+export CHATROOM_DB_PASSWORD
 ./build/server/chatroom_server
 ./build/server/chatroom_server --address 0.0.0.0 --port 8081 --workers 4
 ./build/server/chatroom_server --max-connections 512
@@ -102,8 +117,8 @@ cp config/server.example.json config/server.json
 The default address is `127.0.0.1:8081`. Port `0` lets the operating system choose
 an available port, which appears in the `server_started` JSON log on standard error.
 Use `--help` to list options and Ctrl+C to terminate the server. Database passwords
-and JWT secrets are read from `CHATROOM_DB_PASSWORD` and `CHATROOM_JWT_SECRET`;
-the current `ping` service does not require them. See the
+and JWT secrets are read from `CHATROOM_DB_PASSWORD` and `CHATROOM_JWT_SECRET`.
+Startup checks the database credentials; JWT is not required yet. See the
 [configuration guide](docs/configuration.md) for the full precedence rules.
 
 The default active-connection limit is 1024. Excess connections are closed; if

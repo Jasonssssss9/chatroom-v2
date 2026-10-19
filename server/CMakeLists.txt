@@ -1,3 +1,11 @@
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(MYSQL REQUIRED IMPORTED_TARGET mysqlclient)
+
+add_library(chatroom_db src/db/database.cpp src/db/chat_store.cpp)
+target_include_directories(chatroom_db PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(chatroom_db PUBLIC chatroom_common PkgConfig::MYSQL Threads::Threads)
+target_compile_options(chatroom_db PRIVATE -Wall -Wextra -Wpedantic)
+
 add_library(chatroom_net
     src/net/socket.cpp
     src/net/epoll.cpp
@@ -20,5 +28,5 @@ target_link_libraries(chatroom_app PUBLIC chatroom_net)
 target_compile_options(chatroom_app PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(chatroom_server src/main.cpp)
-target_link_libraries(chatroom_server PRIVATE chatroom_net chatroom_app)
+target_link_libraries(chatroom_server PRIVATE chatroom_app chatroom_db)
 target_compile_options(chatroom_server PRIVATE -Wall -Wextra -Wpedantic)

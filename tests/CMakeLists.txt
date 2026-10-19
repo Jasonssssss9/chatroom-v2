@@ -17,3 +17,14 @@ endif()
 
 include(Catch)
 catch_discover_tests(chatroom_tests PROPERTIES TIMEOUT 15)
+
+if(BUILD_DATABASE_TESTS)
+    add_executable(chatroom_database_tests database_test.cpp)
+    target_link_libraries(chatroom_database_tests PRIVATE
+        chatroom_db chatroom_app Catch2::Catch2WithMain)
+    target_compile_options(chatroom_database_tests PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_definitions(chatroom_database_tests PRIVATE
+        CHATROOM_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/sql/schema.sql")
+    catch_discover_tests(chatroom_database_tests
+        PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE LABELS database)
+endif()

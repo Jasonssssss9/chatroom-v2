@@ -6,7 +6,8 @@
   a feature needs them.
 - Use idiomatic English for all project text, including documentation, comments,
   and runtime messages.
-- Use the commit message format `feat(): description`.
+- Use conventional commit messages such as `feat(database): description` or
+  `fix(protocol): description`.
 - Run the HTTP API and TCP chat service in a single process.
 - Keep the server and command-line client in the same repository and build them
   as separate executables.
@@ -53,5 +54,10 @@ Database settings and JWT secrets can be supplied through
 environment variables. Startup, connections, and request failures use a shared
 JSON logger. See [Configuration and Logging](configuration.md).
 
-HTTP, JWT, MySQL, and password hashing have not been
-implemented yet. Their dependencies will be added as needed.
+MySQL persistence is implemented through the C API, with prepared statements,
+RAII connections and transactions, and concrete operations for users, groups,
+messages, acknowledgments, and file metadata. The executable checks connectivity
+before starting workers. Database integration tests use a separate disposable
+database. See [MySQL Persistence](database.md).
+
+HTTP, JWT, password hashing, and network chat operations are still planned.

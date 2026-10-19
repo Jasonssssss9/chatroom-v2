@@ -107,11 +107,10 @@ export CHATROOM_JWT_SECRET
 ```
 
 The program reads the process environment; it does not load `.env` files. A missing
-password or JWT secret currently produces an empty configuration value. They are
-optional while the server only handles `ping`. Database access and JWT authentication
-are still planned: this step stores their settings without opening MySQL connections
-or issuing tokens. Those modules will validate the credentials they require when
-they are implemented.
+password or JWT secret produces an empty configuration value. The server checks
+database connectivity before starting workers and the Reactor; invalid database
+credentials stop startup. JWT authentication is still planned and its secret is
+not required yet. See [MySQL Persistence](database.md) for setup.
 
 ## Log Format
 
@@ -128,6 +127,7 @@ millisecond precision.
 | Event | Level | Useful context |
 | --- | --- | --- |
 | `server_starting` | `info` | Requested bind address, port, worker count, and capacity limits |
+| `database_connected` | `info` | Database host, port, and name after the startup connectivity check |
 | `server_started` | `info` | Actual port, worker count, and capacity limits after successful setup |
 | `server_failed` | `error` | Startup or runtime phase and exception details |
 | `server_stopped` | `info` | The event loop returned normally |

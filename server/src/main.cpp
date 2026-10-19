@@ -1,4 +1,5 @@
 #include "config.h"
+#include "db/database.h"
 #include "logger.h"
 #include "net/tcp_server.h"
 #include "request_dispatcher.h"
@@ -35,6 +36,13 @@ int main(int argc, char* argv[]) {
                        {"max_connections", config.max_connections},
                        {"max_requests_per_connection", config.max_requests_per_connection},
                        {"max_pending_requests", config.max_pending_requests}});
+        chatroom::initialize_mysql();
+        {
+            chatroom::Database database(config.database);
+        }
+        chatroom::log(chatroom::LogLevel::info, "database_connected",
+                      {{"host", config.database.host}, {"port", config.database.port},
+                       {"database", config.database.name}});
         chatroom::RequestHandler handler;
         chatroom::TcpServer server(config.port, config.address, config.max_connections);
         chatroom::RequestDispatcher dispatcher(

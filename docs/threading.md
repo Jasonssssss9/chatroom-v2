@@ -113,8 +113,9 @@ socket pointer, or reference to the dispatcher's per-connection queue.
 The handler receives the connection ID and a const reference to that task's local
 request. It may be invoked concurrently for different connections, so shared
 service dependencies must support concurrent calls. The current `RequestHandler`
-is stateless. Future database handlers will acquire their own database connection
-for each operation rather than sharing a raw connection between workers.
+is stateless. The database layer provides a caller-owned `Database` and `ChatStore`.
+Future handlers will use a connection owned by their worker rather than sharing
+one raw connection across workers. See [MySQL Persistence](database.md).
 
 Only Reactor callbacks modify the dispatcher's request map and network state.
 Completions look up the ID again. They do not reuse a connection reference captured
