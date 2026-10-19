@@ -60,4 +60,9 @@ messages, acknowledgments, and file metadata. The executable checks connectivity
 before starting workers. Database integration tests use a separate disposable
 database. See [MySQL Persistence](database.md).
 
-HTTP, JWT, password hashing, and network chat operations are still planned.
+HTTP registration and login are implemented with cpp-httplib, OpenSSL scrypt,
+and jwt-cpp HS256 token issuance. HTTP uses a separate fixed worker pool; each
+worker reuses its own database connection. Both listeners run in the same process.
+See [HTTP Authentication](authentication.md).
+
+TCP token validation, online sessions, and network chat operations are still planned.

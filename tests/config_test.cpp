@@ -74,6 +74,36 @@ TEST_CASE("The server starts with useful defaults and no credentials", "[config]
     CHECK(config.database.user == "chatroom");
     CHECK(config.database.password.empty());
     CHECK(config.jwt_secret.empty());
+    CHECK(config.http.port == 8080);
+    CHECK(config.http.worker_threads == 4);
+    CHECK(config.token_lifetime_seconds == 3600);
+}
+
+TEST_CASE("HTTP and JWT settings use JSON values and CLI overrides", "[config]") {
+    TestEnvironment environment;
+    ConfigFile file(R"({"http":{"port":9090,"worker_threads":2},"jwt":{"token_lifetime_seconds":120}})");
+    const auto from_file = load_config({"--config", file.path});
+    CHECK(from_file.http.port == 9090);
+    CHECK(from_file.http.worker_threads == 2);
+    CHECK(from_file.token_lifetime_seconds == 120);
+    const auto overridden = load_config({"--http-port", "0", "--http-workers", "3", "--config", file.path});
+    CHECK(overridden.http.port == 0);
+    CHECK(overridden.http.worker_threads == 3);
+    CHECK(overridden.token_lifetime_seconds == 120);
+}
+
+TEST_CASE("Invalid HTTP and JWT settings fail during configuration", "[config]") {
+    TestEnvironment environment;
+    for (const auto* contents : {R"({"http":{"port":65536}})", R"({"http":{"port":-1}})",
+                                 R"({"http":{"worker_threads":0}})",
+                                 R"({"jwt":{"token_lifetime_seconds":0}})",
+                                 R"({"jwt":{"token_lifetime_seconds":86401}})",
+                                 R"({"jwt":{"token_lifetime_seconds":"3600"}})"}) {
+        ConfigFile file(contents);
+        CHECK_THROWS_AS(load_config({"--config", file.path}), std::invalid_argument);
+    }
+    CHECK_THROWS_AS(load_config({"--http-port", "65536"}), std::invalid_argument);
+    CHECK_THROWS_AS(load_config({"--http-workers", "0"}), std::invalid_argument);
 }
 
 TEST_CASE("A JSON file configures the server, database, and log level", "[config]") {

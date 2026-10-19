@@ -44,9 +44,12 @@ fields are ignored. The root and each supplied section must be JSON objects.
 | `database.port` | `3306` | MySQL port, from 1 to 65535 |
 | `database.name` | `chatroom` | Database name |
 | `database.user` | `chatroom` | Database user |
+| `http.port` | `8080` | HTTP port, from 0 to 65535; uses `server.address` |
+| `http.worker_threads` | `4` | Positive fixed HTTP worker count |
+| `jwt.token_lifetime_seconds` | `3600` | JWT lifetime, from 1 to 86400 seconds |
 | `log.level` | `info` | Minimum severity: `debug`, `info`, `warn`, or `error` |
 
-Server and database ports, the worker count, and all capacity limits must be JSON
+All ports, worker counts, the JWT lifetime, and capacity limits must be JSON
 integers, not strings or floating-point numbers. Addresses, database names, and user names must be
 non-empty strings. Invalid input stops startup with an error instead of silently
 falling back to a default.
@@ -59,6 +62,8 @@ falling back to a default.
 | `--address IPv4` | Override `server.address` |
 | `--port NUMBER` | Override `server.port` |
 | `--workers NUMBER` | Override `server.worker_threads` |
+| `--http-port NUMBER` | Override `http.port` |
+| `--http-workers NUMBER` | Override `http.worker_threads` |
 | `--max-connections NUMBER` | Override `server.max_connections` |
 | `--max-requests-per-connection NUMBER` | Override `server.max_requests_per_connection` |
 | `--max-pending-requests NUMBER` | Override `server.max_pending_requests` |
@@ -109,8 +114,9 @@ export CHATROOM_JWT_SECRET
 The program reads the process environment; it does not load `.env` files. A missing
 password or JWT secret produces an empty configuration value. The server checks
 database connectivity before starting workers and the Reactor; invalid database
-credentials stop startup. JWT authentication is still planned and its secret is
-not required yet. See [MySQL Persistence](database.md) for setup.
+credentials stop startup. HTTP authentication requires a JWT secret of at least
+32 bytes. Keep it stable across restarts when preserving token validity. See
+[MySQL Persistence](database.md) and [HTTP Authentication](authentication.md).
 
 ## Log Format
 
@@ -128,6 +134,8 @@ millisecond precision.
 | --- | --- | --- |
 | `server_starting` | `info` | Requested bind address, port, worker count, and capacity limits |
 | `database_connected` | `info` | Database host, port, and name after the startup connectivity check |
+| `http_request` | `info` or `error` | Client IP, method, URI path, status, and response error details |
+| `http_database_error` | `error` | Numeric MySQL error code without SQL values |
 | `server_started` | `info` | Actual port, worker count, and capacity limits after successful setup |
 | `server_failed` | `error` | Startup or runtime phase and exception details |
 | `server_stopped` | `info` | The event loop returned normally |

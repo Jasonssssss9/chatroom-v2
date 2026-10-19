@@ -5,6 +5,10 @@ event-driven. JSON parsing, application handlers, and response serialization run
 as worker tasks. The executable starts four workers by default; JSON configuration
 or `--workers` can change the fixed pool size. See [Configuration and Logging](configuration.md).
 
+HTTP authentication uses cpp-httplib's own fixed worker pool. HTTP workers handle
+password hashing and SQL independently of the TCP Reactor and its request pool.
+See [HTTP Authentication](authentication.md) for HTTP limits and lifetimes.
+
 ## Responsibilities
 
 | Component | Responsibility |

@@ -7,6 +7,13 @@
     "max_requests_per_connection": 32,
     "max_pending_requests": 1024
   },
+  "http": {
+    "port": 8080,
+    "worker_threads": 4
+  },
+  "jwt": {
+    "token_lifetime_seconds": 3600
+  },
   "database": {
     "host": "127.0.0.1",
     "port": 3306,

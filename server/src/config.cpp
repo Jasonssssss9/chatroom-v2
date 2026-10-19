@@ -89,6 +89,17 @@ void read_file(ServerConfig& config, const std::string& path) {
         config.max_pending_requests = read_number(server.at("max_pending_requests"),
             "server.max_pending_requests", 1, std::numeric_limits<std::size_t>::max());
     }
+    const auto http = section(document, "http");
+    if (http.contains("port")) config.http.port = read_number(http.at("port"), "http.port", 0, 65535);
+    if (http.contains("worker_threads")) {
+        config.http.worker_threads = read_number(http.at("worker_threads"), "http.worker_threads",
+                                                 1, std::numeric_limits<std::size_t>::max());
+    }
+    const auto jwt = section(document, "jwt");
+    if (jwt.contains("token_lifetime_seconds")) {
+        config.token_lifetime_seconds = read_number(jwt.at("token_lifetime_seconds"),
+                                                    "jwt.token_lifetime_seconds", 1, 86400);
+    }
     const auto database = section(document, "database");
     if (database.contains("host")) config.database.host = read_text(database.at("host"), "database.host");
     if (database.contains("port")) {
@@ -121,7 +132,7 @@ ServerConfig load_config(const std::vector<std::string_view>& arguments) {
         if (option != "--config" && option != "--address" && option != "--port" &&
             option != "--workers" && option != "--max-connections" &&
             option != "--max-requests-per-connection" && option != "--max-pending-requests" &&
-            option != "--log-level") {
+            option != "--http-port" && option != "--http-workers" && option != "--log-level") {
             throw std::invalid_argument("Unknown option: " + std::string(option));
         }
         if (i + 1 == arguments.size()) {
@@ -139,6 +150,11 @@ ServerConfig load_config(const std::vector<std::string_view>& arguments) {
         const auto value = arguments[i + 1];
         if (option == "--address") config.address = value;
         if (option == "--port") config.port = parse_number(value, "--port", 0, 65535);
+        if (option == "--http-port") config.http.port = parse_number(value, "--http-port", 0, 65535);
+        if (option == "--http-workers") {
+            config.http.worker_threads = parse_number(value, "--http-workers", 1,
+                                                       std::numeric_limits<std::size_t>::max());
+        }
         if (option == "--workers") {
             config.worker_threads = parse_number(value, "--workers", 1,
                                                  std::numeric_limits<std::size_t>::max());

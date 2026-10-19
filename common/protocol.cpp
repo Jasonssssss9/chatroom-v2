@@ -16,7 +16,7 @@ std::string read_name(const json& message, const char* field) {
 }
 } // namespace
 
-Request parse_request(std::string_view payload) {
+nlohmann::json parse_json(std::string_view payload) {
     const auto check_depth = [](int depth, json::parse_event_t event, json&) {
         // Container start events use zero-based depth; the root counts as level one.
         if ((event == json::parse_event_t::object_start ||
@@ -29,6 +29,11 @@ Request parse_request(std::string_view payload) {
     if (message.is_discarded()) {
         throw ProtocolError("invalid_json", "Payload must contain valid JSON");
     }
+    return message;
+}
+
+Request parse_request(std::string_view payload) {
+    const auto message = parse_json(payload);
     if (!message.is_object()) {
         throw ProtocolError("invalid_request", "Request must be a JSON object");
     }

@@ -39,6 +39,7 @@ Supply the password and start the server:
 read -r -s -p 'Database password: ' CHATROOM_DB_PASSWORD
 printf '\n'
 export CHATROOM_DB_PASSWORD
+export CHATROOM_JWT_SECRET="$(openssl rand -hex 32)"
 ./build/server/chatroom_server
 ```
 
@@ -96,8 +97,8 @@ nested. Store methods that write multiple tables already own their transaction.
 
 ## Store Behavior
 
-`create_user()` accepts an already hashed password. Validation, hashing, and
-verification belong to the upcoming authentication service. Missing users return
+`create_user()` accepts an already hashed password. The HTTP authentication service
+provides validation, hashing, and verification. Missing users return
 `std::nullopt`; a duplicate username raises MySQL error 1062.
 
 `create_group()` inserts the group and members atomically, always including the
@@ -133,9 +134,9 @@ retries from recreating deliveries.
 Upload/download I/O and file notifications remain service work.
 
 Field lengths and action-specific validation belong to those services; database
-constraints provide the final consistency check. HTTP, JWT, TCP login, online
-delivery, and reconnect scheduling are not implemented here. The only network
-action remains `ping`.
+constraints provide the final consistency check. HTTP registration and login now
+use the user operations. TCP login, online delivery, and reconnect scheduling are
+not implemented here. The only TCP action remains `ping`.
 
 ## Integration Tests
 

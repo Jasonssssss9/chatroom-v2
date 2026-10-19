@@ -266,10 +266,11 @@ The [v1 request dispatcher](https://github.com/Jasonssssss9/chatroom-server-v1/b
 used numeric codes and header fields. The table below keeps its user-facing
 features while assigning readable operation names and the appropriate transport.
 
-Everything in this table is planned. Currently, every TCP action other than `ping`
-returns `unknown_action`.
+HTTP registration and login are implemented; see [HTTP Authentication](authentication.md).
+The other operations below remain planned. Every TCP action other than `ping`
+currently returns `unknown_action`.
 
-| v1 operation | Planned v2 operation | Transport |
+| v1 operation | v2 operation | Transport |
 | --- | --- | --- |
 | `010`: register | `POST /api/users` | HTTP |
 | `020`: login | `POST /api/auth/token`, followed by TCP `auth` | HTTP and TCP |

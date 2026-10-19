@@ -24,6 +24,9 @@ struct ProtocolError : std::runtime_error {
     Request request;
 };
 
+// Parses JSON with the shared 64-level nesting limit. Throws ProtocolError on failure.
+nlohmann::json parse_json(std::string_view payload);
+
 // Parses JSON and validates the envelope. Operation-specific fields belong to handlers.
 // Allows at most 64 nested objects and arrays, counting the root as level one.
 // Throws ProtocolError for malformed JSON or an invalid request envelope.
