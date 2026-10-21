@@ -142,8 +142,8 @@ Session rules are deliberately small:
 
 - `ping` and `authenticate` are available before authentication. Every other
   action requires an unexpired session; otherwise it receives
-  `authentication_required`. Chat actions are still unimplemented and receive
-  `unknown_action` after authentication.
+  `authentication_required`. Authenticated users can use `send_message`;
+  unimplemented actions receive `unknown_action`.
 - Each user has one online TCP connection. When a new authentication succeeds,
   the Reactor replaces the binding and immediately closes the previous connection
   with reason `session_replaced`. Requests on different connections have no global
@@ -163,12 +163,14 @@ JWT verification and SQL run on TCP workers. Only the Reactor modifies session
 maps, before it submits the connection's next request. If a connection disappears
 while authentication runs, its late result cannot establish a session or replace
 another connection. Expiration is checked again when applying authentication.
-Closing a replaced connection drops waiting requests and results; it does not
-cancel business work already running on a worker. See [Threading](threading.md).
+Closing a replaced connection drops waiting requests and direct responses; it
+does not cancel business work already running on a worker. A committed message
+can still notify its recipients. See [Threading](threading.md).
 
 The user ID comes from the verified token, never a client-supplied `user_id` or
-sender field. User existence is checked at authentication; there is no per-request
-user lookup or token revocation service.
+sender field. The sender's existence is checked at authentication rather than on
+every request. Message handlers validate recipients separately. There is no token
+revocation service.
 
 ## Threads and Logs
 

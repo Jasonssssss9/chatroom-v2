@@ -36,6 +36,7 @@ private:
         std::optional<Session> session;
         // Correlation fields only; request data and tokens remain on the worker.
         Request context;
+        std::optional<UserNotification> notification = std::nullopt;
     };
 
     void start_next(ConnectionId id);

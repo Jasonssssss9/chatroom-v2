@@ -134,20 +134,20 @@ TEST_CASE("HTTP tokens authenticate TCP sessions and successful login replaces t
     Peer first(running.server.port());
     first.send("ping");
     CHECK(first.receive()["data"]["pong"] == true);
-    first.send("send_message");
+    first.send("unknown");
     CHECK(first.receive()["error"]["code"] == "authentication_required");
     first.send("authenticate", {{"token", "incorrect-token"}});
     CHECK(first.receive()["error"]["code"] == "invalid_token");
     // Queue both requests before receiving either response.
     first.send("authenticate", {{"token", token}, {"user_id", "999999"}});
-    first.send("send_message");
+    first.send("unknown");
     CHECK(first.receive()["data"]["user_id"] == user_id);
     CHECK(first.receive()["error"]["code"] == "unknown_action");
 
     // Invalid refreshes keep the existing identity.
     first.send("authenticate", {{"token", "incorrect-token"}});
     CHECK(first.receive()["error"]["code"] == "invalid_token");
-    first.send("send_message");
+    first.send("unknown");
     CHECK(first.receive()["error"]["code"] == "unknown_action");
     first.send("authenticate", {{"token", token}});
     CHECK(first.receive()["data"]["user_id"] == user_id);
@@ -161,7 +161,7 @@ TEST_CASE("HTTP tokens authenticate TCP sessions and successful login replaces t
     char byte;
     const auto count = ::recv(first.socket.get(), &byte, 1, 0);
     CHECK((count == 0 || (count < 0 && errno == ECONNRESET)));
-    second.send("send_message");
+    second.send("unknown");
     CHECK(second.receive()["error"]["code"] == "unknown_action");
     running.check();
     CHECK_FALSE(running.dispatcher.sessions().connection_for(std::stoull(user_id.get<std::string>())));
@@ -200,5 +200,158 @@ TEST_CASE("TCP database errors do not bind sessions or stop the Reactor", "[data
     CHECK(peer.receive()["error"]["code"] == "authentication_required");
     peer.send("ping");
     CHECK(peer.receive()["data"]["pong"] == true);
+    running.check();
+}
+
+namespace {
+void authenticate(Peer& peer, const RunningChat& running, std::uint64_t user) {
+    peer.send("authenticate", {{"token", running.tokens.issue(user)}});
+    REQUIRE(peer.receive()["data"]["user_id"] == std::to_string(user));
+}
+
+json message_data(const std::string& client_id, const std::vector<std::uint64_t>& recipients,
+                  const std::string& text) {
+    auto ids = json::array();
+    for (const auto id : recipients) ids.push_back(std::to_string(id));
+    return {{"client_message_id", client_id}, {"recipients", std::move(ids)}, {"text", text}};
+}
+} // namespace
+
+TEST_CASE("Authenticated peers exchange persisted private messages", "[database][tcp][message]") {
+    DatabaseFixture fixture;
+    const auto alice = fixture.store.create_user("alice", "unused-test-hash");
+    const auto bob = fixture.store.create_user("bob", "unused-test-hash");
+    RunningChat running;
+    Peer first(running.server.port());
+    Peer second(running.server.port());
+    authenticate(first, running, alice);
+    authenticate(second, running, bob);
+    auto data = message_data("alice-1", {bob}, u8"Hello \U0001f642");
+    data["sender_id"] = std::to_string(bob);
+    first.send("send_message", data);
+    const auto response = first.receive();
+    REQUIRE(response["ok"] == true);
+    const auto notice = second.receive();
+    CHECK(notice["type"] == "notification");
+    CHECK(notice["action"] == "message");
+    CHECK_FALSE(notice.contains("request_id"));
+    CHECK(notice["data"] == json{{"message_id", response["data"]["message_id"]},
+                                  {"sender_id", std::to_string(alice)},
+                                  {"client_message_id", "alice-1"}, {"text", data["text"]}});
+    // This independent connection must see the committed record after delivery.
+    const auto stored = fixture.store.pending_messages(bob);
+    REQUIRE(stored.size() == 1);
+    CHECK(std::to_string(stored[0].id) == response["data"]["message_id"]);
+    CHECK(stored[0].sender_id == alice);
+    CHECK(stored[0].text == data["text"]);
+    CHECK_FALSE(stored[0].group_id);
+
+    second.send("send_message", message_data("bob-1", {alice}, "Hi Alice"));
+    REQUIRE(second.receive()["ok"] == true);
+    const auto reply = first.receive();
+    CHECK(reply["data"]["sender_id"] == std::to_string(bob));
+    CHECK(reply["data"]["text"] == "Hi Alice");
+    CHECK(fixture.count("messages") == 2);
+    CHECK(fixture.count("message_deliveries") == 2);
+    running.check();
+}
+
+TEST_CASE("Multiple recipients share one message including self and offline users",
+          "[database][tcp][message]") {
+    DatabaseFixture fixture;
+    const auto alice = fixture.store.create_user("alice", "unused-test-hash");
+    const auto bob = fixture.store.create_user("bob", "unused-test-hash");
+    const auto offline = fixture.store.create_user("offline", "unused-test-hash");
+    RunningChat running;
+    Peer first(running.server.port());
+    Peer second(running.server.port());
+    authenticate(first, running, alice);
+    authenticate(second, running, bob);
+    first.send("send_message", message_data("multi-1", {bob, alice, offline, bob}, "Hello everyone"));
+    const auto response = first.receive();
+    REQUIRE(response["type"] == "response");
+    REQUIRE(response["ok"] == true);
+    const auto self = first.receive();
+    const auto other = second.receive();
+    CHECK(self == other);
+    CHECK(other["data"]["message_id"] == response["data"]["message_id"]);
+    CHECK(fixture.count("messages") == 1);
+    CHECK(fixture.count("message_deliveries") == 3);
+    CHECK(fixture.store.pending_messages(offline).size() == 1);
+    second.send("ping");
+    CHECK(second.receive()["data"]["pong"] == true);
+    running.check();
+}
+
+TEST_CASE("Missing recipients reject the entire message without notifying valid recipients",
+          "[database][tcp][message]") {
+    DatabaseFixture fixture;
+    const auto alice = fixture.store.create_user("alice", "unused-test-hash");
+    const auto bob = fixture.store.create_user("bob", "unused-test-hash");
+    RunningChat running;
+    Peer first(running.server.port());
+    Peer second(running.server.port());
+    authenticate(first, running, alice);
+    authenticate(second, running, bob);
+    first.send("send_message", message_data("invalid-1", {bob, 18446744073709551615ULL}, "Hello"));
+    CHECK(first.receive()["error"]["code"] == "invalid_recipient");
+    CHECK(fixture.count("messages") == 0);
+    CHECK(fixture.count("message_deliveries") == 0);
+    second.send("ping");
+    CHECK(second.receive()["data"]["pong"] == true);
+    running.check();
+}
+
+TEST_CASE("Message retries reuse their ID and reject changed text or recipients",
+          "[database][tcp][message]") {
+    DatabaseFixture fixture;
+    const auto alice = fixture.store.create_user("alice", "unused-test-hash");
+    const auto bob = fixture.store.create_user("bob", "unused-test-hash");
+    const auto other = fixture.store.create_user("other", "unused-test-hash");
+    RunningChat running;
+    Peer first(running.server.port());
+    Peer second(running.server.port());
+    authenticate(first, running, alice);
+    authenticate(second, running, bob);
+    const auto data = message_data("retry-1", {bob}, "Hello");
+    first.send("send_message", data);
+    const auto original = first.receive();
+    REQUIRE(original["ok"] == true);
+    const auto notice = second.receive();
+    first.send("send_message", message_data("retry-1", {bob, bob}, "Hello"));
+    CHECK(first.receive()["data"]["message_id"] == original["data"]["message_id"]);
+    CHECK(second.receive() == notice);
+    for (const auto& changed : {message_data("retry-1", {bob}, "Changed text"),
+                                message_data("retry-1", {other}, "Hello")}) {
+        first.send("send_message", changed);
+        CHECK(first.receive()["error"]["code"] == "message_conflict");
+    }
+    CHECK(fixture.count("messages") == 1);
+    CHECK(fixture.count("message_deliveries") == 1);
+    second.send("ping");
+    CHECK(second.receive()["data"]["pong"] == true);
+    running.check();
+}
+
+TEST_CASE("Message byte limits remain safe after JSON escaping", "[database][tcp][message]") {
+    DatabaseFixture fixture;
+    const auto alice = fixture.store.create_user("alice", "unused-test-hash");
+    const auto bob = fixture.store.create_user("bob", "unused-test-hash");
+    RunningChat running;
+    Peer first(running.server.port());
+    Peer second(running.server.port());
+    authenticate(first, running, alice);
+    authenticate(second, running, bob);
+    const std::string client_id(64, '\1');
+    const std::string text(4096, '\0');
+    first.send("send_message", message_data(client_id, std::vector<std::uint64_t>(64, bob), text));
+    REQUIRE(first.receive()["ok"] == true);
+    const auto notice = second.receive();
+    CHECK(notice["data"]["client_message_id"] == client_id);
+    CHECK(notice["data"]["text"] == text);
+    CHECK(notice.dump().size() <= kMaxFrameSize);
+    REQUIRE(fixture.store.pending_messages(bob).size() == 1);
+    CHECK(fixture.store.pending_messages(bob)[0].text == text);
+    CHECK(fixture.count("message_deliveries") == 1);
     running.check();
 }

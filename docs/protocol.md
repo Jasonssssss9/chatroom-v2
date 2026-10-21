@@ -11,11 +11,13 @@ The server currently supports:
 - Parsing and validating request envelopes.
 - A correlated response to `ping`.
 - JWT authentication with `authenticate` and Reactor-owned user sessions.
+- Persisted private and multi-recipient messages with online notifications.
 - Consistent errors for malformed JSON, invalid requests, and unsupported actions.
-- Building notification envelopes for future server-initiated messages.
+- Server-initiated `message` notifications.
 
-Only `ping` and `authenticate` are dispatched. Messages, groups, acknowledgments,
-and file transfers are not implemented yet. They do not return success placeholders.
+The implemented actions are `ping`, `authenticate`, and `send_message`. Groups,
+acknowledgments, offline replay, and file transfers are not implemented yet.
+They do not return success placeholders.
 
 ## 2. Framing
 
@@ -183,9 +185,8 @@ reflecting large or invalid metadata into an error response.
 
 ### Notifications
 
-The notification envelope is available as a shared builder. The current server
-does not emit business notifications yet. A future message delivery will use this
-shape:
+The server uses notifications to deliver persisted messages independently of the
+recipient's requests:
 
 ```json
 {
@@ -194,14 +195,16 @@ shape:
   "data": {
     "message_id": "105",
     "sender_id": "7",
+    "client_message_id": "alice-1",
     "text": "Hello"
   }
 }
 ```
 
 A notification has an action and object data. It has no `request_id` or `ok` field
-because it is not the result of a client request. Future persistent deliveries will
-carry a `message_id` in their data so receivers can acknowledge and deduplicate them.
+because it is not the result of a client request. Each delivery carries a
+`message_id`; receivers can use it for deduplication. Network acknowledgments
+will be added separately.
 
 ## 4. Implemented Actions
 
@@ -248,6 +251,64 @@ connection. Failed authentication preserves any existing session.
 See [Authentication](authentication.md#tcp-connection-authentication) for token
 claims, expiration, duplicate login, and disconnect behavior.
 
+### send_message
+
+Send to one or more user IDs after authentication:
+
+```json
+{
+  "type": "request",
+  "request_id": "send-1",
+  "action": "send_message",
+  "data": {
+    "client_message_id": "alice-1",
+    "recipients": ["2", "3"],
+    "text": "Hello everyone"
+  }
+}
+```
+
+| Field | Type | Rule |
+| --- | --- | --- |
+| `client_message_id` | String | Required; 1 to 64 UTF-8 bytes; unique per sender for each new message |
+| `recipients` | Array | Required; 1 to 64 user ID strings before deduplication |
+| `text` | String | Required; 1 to 4,096 UTF-8 bytes |
+
+Each user ID is a positive unsigned 64-bit decimal string with no leading zeros,
+sign, or whitespace. Duplicate recipients are merged; their order does not matter.
+Sending to yourself is allowed. All recipients must exist, including offline users.
+If any recipient is missing, the entire request receives `invalid_recipient` and
+no message or delivery is created. Strings are used as supplied, without trimming.
+Unknown data fields are ignored. A supplied `sender_id` never overrides the
+authenticated session.
+
+The worker saves one message and its recipient delivery rows in a transaction.
+Only after commit does it return success:
+
+```json
+{"type":"response","request_id":"send-1","action":"send_message","ok":true,"data":{"message_id":"105"}}
+```
+
+The Reactor sends the `message` notification shown above to recipients with an
+unexpired online session. Their current connections are resolved when the result
+arrives, rather than when the request was received. A sender included in
+`recipients` receives its response before its own notification. Other notifications
+can interleave with responses, so clients must distinguish `type` and use request
+IDs for correlation.
+
+A success response confirms persistence, not receipt or reading. Offline users,
+disconnects, or output-buffer failures leave the delivery pending in MySQL.
+Automatic replay and `ack` are not implemented yet. If the sender disconnects
+while its task runs, a committed message can still notify online recipients.
+
+For a retry, reuse `client_message_id`, text, and the same recipient set. The
+stored `message_id` is returned without extra database deliveries; online
+recipients may receive the notification again. Reusing that client ID with changed
+text or recipients receives `message_conflict`. Use a new client ID for a new
+message. Different senders may use the same client ID independently.
+
+See [Messaging](messaging.md) for a two-client walkthrough.
+
 ## 5. Current Errors and Connection Behavior
 
 | Code | Cause | Connection |
@@ -257,9 +318,11 @@ claims, expiration, duplicate login, and disconnect behavior.
 | `invalid_token` | Invalid or expired JWT, or token user no longer exists | Kept open |
 | `already_authenticated` | A bound connection attempts to change users | Kept open |
 | `authentication_required` | Action requires an unexpired session | Kept open |
+| `invalid_recipient` | At least one recipient does not exist | Kept open |
+| `message_conflict` | A sender reuses a client message ID with different text or recipients | Kept open |
 | `unknown_action` | Authenticated request with an unsupported action | Kept open |
 | `internal_error` | Unexpected application-handler or response serialization failure | Kept open |
-| `response_too_large` | Serialized response exceeds 65,536 bytes | Kept open |
+| `response_too_large` | Serialized response or notification exceeds 65,536 bytes | Kept open |
 
 Envelope validation happens before action dispatch. Within an object, the parser
 checks `type`, `request_id`, `action`, then `data`, and reports the first failing
@@ -294,8 +357,9 @@ The [v1 request dispatcher](https://github.com/Jasonssssss9/chatroom-server-v1/b
 used numeric codes and header fields. The table below keeps its user-facing
 features while assigning readable operation names and the appropriate transport.
 
-HTTP registration, login, and TCP authentication are implemented; see
-[Authentication](authentication.md). The other operations below remain planned.
+HTTP registration, login, TCP authentication, and direct or multi-recipient sends
+are implemented. See [Authentication](authentication.md) and [Messaging](messaging.md).
+Logout, groups, acknowledgments, and file transfers remain planned.
 
 | v1 operation | v2 operation | Transport |
 | --- | --- | --- |
@@ -309,19 +373,19 @@ HTTP registration, login, and TCP authentication are implemented; see
 | `330`: download file | `GET /api/files/{id}` | HTTP |
 | `INF` notifications | `message`, `group_created`, or `file_available` notifications | TCP |
 
-The planned action data is intentionally small:
+The action data is intentionally small:
 
 | Action | Planned data fields |
 | --- | --- |
 | `authenticate` (implemented) | `token` |
-| `send_message` | `client_message_id`, `recipients` (array of user ID strings), `text` |
+| `send_message` (implemented) | `client_message_id`, `recipients` (array of user ID strings), `text` |
 | `create_group` | `name`, `members` (array of user ID strings) |
 | `send_group_message` | `client_message_id`, `group_id`, `text` |
 | `ack` | `message_id` |
 | `logout` | Empty object |
 
 The remaining payload fields will be implemented and validated with their business services.
-The server will obtain the sender from the authenticated connection, not a
+The server obtains the sender from the authenticated connection, not a
 client-supplied sender field. IDs are represented as strings in the protocol.
 File bytes will travel over HTTP; TCP notifications will reference the file ID.
 
@@ -333,10 +397,8 @@ The three message-related IDs have different jobs:
 | `client_message_id` | Sending client | Recognize retries of the same outgoing message |
 | `message_id` | Server | Identify a persisted delivery for acknowledgment and deduplication |
 
-For the planned delivery flow, a successful send response will mean that the
-server has persisted the message. It will not mean that the recipient has received
-or read it. Receiver acknowledgments will be separate `ack` requests. That flow is
-not part of the current `ping` implementation.
+Successful sends confirm that the server has persisted the message. Receiver
+acknowledgments will be separate `ack` requests.
 
 ## 7. Code Layout and Extension
 
@@ -345,7 +407,7 @@ FrameDecoder extracts a payload
     -> RequestDispatcher queues it by connection ID
     -> a worker parses the envelope and calls RequestHandler
     -> the worker serializes the response and posts a completion
-    -> the Reactor applies any authentication result, queues output, and starts the next request
+    -> the Reactor applies authentication, queues responses and notifications, and starts the next request
 ```
 
 `common/protocol.h` defines `Request`, `ProtocolError`, and message builders.

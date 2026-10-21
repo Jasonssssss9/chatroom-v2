@@ -1209,3 +1209,106 @@ TEST_CASE("Expired or oversized authentication results cannot establish sessions
     CHECK(nlohmann::json::parse(receive_frame(client.get()))["data"]["authenticated"] == false);
     fixture.check();
 }
+
+TEST_CASE("Committed notifications are routed after their sender disconnects",
+          "[server][dispatcher][message]") {
+    std::promise<void> started;
+    auto active = started.get_future();
+    std::promise<void> disconnected;
+    auto closed = disconnected.get_future();
+    std::atomic<ConnectionId> sender_id{0};
+    RunningServer fixture;
+    TaskGate gate;
+    const auto notice = make_notification("message", {{"message_id", "1"}}).dump();
+    fixture.use_session_workers([&, wait = gate.future](ConnectionId id, const Request& request,
+                                                       std::optional<Session>) {
+        if (request.action == "authenticate") {
+            return RequestResult{make_response(request), Session{7, std::chrono::system_clock::now() + 1h}};
+        }
+        sender_id = id;
+        started.set_value();
+        wait.wait();
+        return RequestResult{make_response(request), std::nullopt, UserNotification{{7}, notice}};
+    }, 1);
+    fixture.server.set_disconnect_handler([&](ConnectionId id) {
+        fixture.dispatcher->disconnect(id);
+        if (id == sender_id) disconnected.set_value();
+    });
+    fixture.start();
+    auto recipient = connect_client(fixture.server.port());
+    send_all(recipient.get(), encode_frame(R"({"type":"request","request_id":"a","action":"authenticate"})"));
+    REQUIRE(nlohmann::json::parse(receive_frame(recipient.get()))["ok"] == true);
+    auto sender = connect_client(fixture.server.port());
+    send_all(sender.get(), encode_frame(R"({"type":"request","request_id":"s","action":"send_message"})"));
+    REQUIRE(active.wait_for(2s) == std::future_status::ready);
+    const linger reset{1, 0};
+    REQUIRE(::setsockopt(sender.get(), SOL_SOCKET, SO_LINGER, &reset, sizeof(reset)) == 0);
+    sender.reset();
+    REQUIRE(closed.wait_for(2s) == std::future_status::ready);
+    gate.release();
+    CHECK(receive_frame(recipient.get()) == notice);
+    fixture.check();
+}
+
+TEST_CASE("Notifications use the recipient's current connection when work completes",
+          "[server][dispatcher][message]") {
+    std::promise<void> started;
+    auto active = started.get_future();
+    RunningServer fixture;
+    TaskGate gate;
+    const auto notice = make_notification("message", {{"message_id", "1"}}).dump();
+    fixture.use_session_workers([&, wait = gate.future](ConnectionId, const Request& request,
+                                                       std::optional<Session>) {
+        if (request.action == "authenticate") {
+            return RequestResult{make_response(request), Session{7, std::chrono::system_clock::now() + 1h}};
+        }
+        started.set_value();
+        wait.wait();
+        return RequestResult{make_response(request), std::nullopt, UserNotification{{7}, notice}};
+    });
+    fixture.start();
+    const auto authenticate = encode_frame(R"({"type":"request","request_id":"a","action":"authenticate"})");
+    auto old = connect_client(fixture.server.port());
+    send_all(old.get(), authenticate);
+    REQUIRE(nlohmann::json::parse(receive_frame(old.get()))["ok"] == true);
+    auto sender = connect_client(fixture.server.port());
+    send_all(sender.get(), encode_frame(R"({"type":"request","request_id":"s","action":"send_message"})"));
+    REQUIRE(active.wait_for(2s) == std::future_status::ready);
+    auto current = connect_client(fixture.server.port());
+    send_all(current.get(), authenticate);
+    REQUIRE(nlohmann::json::parse(receive_frame(current.get()))["ok"] == true);
+    expect_closed(old.get());
+    gate.release();
+    CHECK(nlohmann::json::parse(receive_frame(sender.get()))["ok"] == true);
+    CHECK(receive_frame(current.get()) == notice);
+    fixture.check();
+}
+
+TEST_CASE("Oversized results do not send notifications or stop the Reactor",
+          "[server][dispatcher][message]") {
+    bool oversized_notice = false;
+    SECTION("Response exceeds the frame limit") {}
+    SECTION("Notification exceeds the frame limit") { oversized_notice = true; }
+    RunningServer fixture;
+    fixture.use_session_workers([oversized_notice](ConnectionId, const Request& request,
+                                                  std::optional<Session>) {
+        if (request.action == "authenticate") {
+            return RequestResult{make_response(request), Session{7, std::chrono::system_clock::now() + 1h}};
+        }
+        if (request.action == "send_message") {
+            return RequestResult{make_response(request, {{"text", std::string(oversized_notice ? 0 : kMaxFrameSize, 'x')}}),
+                std::nullopt, UserNotification{{7}, std::string(oversized_notice ? kMaxFrameSize + 1 : 1, 'x')}};
+        }
+        return RequestResult{make_response(request, {{"pong", true}})};
+    });
+    fixture.start();
+    auto recipient = connect_client(fixture.server.port());
+    send_all(recipient.get(), encode_frame(R"({"type":"request","request_id":"a","action":"authenticate"})"));
+    REQUIRE(nlohmann::json::parse(receive_frame(recipient.get()))["ok"] == true);
+    auto sender = connect_client(fixture.server.port());
+    send_all(sender.get(), encode_frame(R"({"type":"request","request_id":"s","action":"send_message"})"));
+    CHECK(nlohmann::json::parse(receive_frame(sender.get()))["error"]["code"] == "response_too_large");
+    send_all(recipient.get(), encode_frame(R"({"type":"request","request_id":"p","action":"ping"})"));
+    CHECK(nlohmann::json::parse(receive_frame(recipient.get()))["data"]["pong"] == true);
+    fixture.check();
+}

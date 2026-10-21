@@ -29,16 +29,16 @@
 - Disk storage: uploaded file contents, referenced by storage keys in MySQL.
 
 Each TCP message consists of a four-byte length in network byte order followed by
-a JSON payload. The planned delivery flow persists messages before the server
-reports success to the sender. Receiving clients will acknowledge messages and
-discard duplicates using message IDs. Unacknowledged messages can be delivered again.
+a JSON payload. Direct messages are persisted before the server reports success
+to the sender and notifies online recipients. ACK handling and offline replay
+will let receiving clients acknowledge and deduplicate persistent deliveries.
 
 ## Current Status
 
 The server network layer implements non-blocking IPv4 TCP, an epoll ET Reactor,
 message framing, buffered writes, and cross-thread sends through an eventfd-backed
 queue. A configurable pool (four workers by default) parses and handles requests,
-with per-connection ordering and completions returned to the Reactor. The executable implements `ping`, `authenticate`, and
+with per-connection ordering and completions returned to the Reactor. The executable implements `ping`, `authenticate`, `send_message`, and
 correlated protocol errors. Catch2 covers framing, request validation, handlers,
 connection I/O, and TCP integration. The command-line client uses a blocking TCP
 connection with separate input and receive threads. Its library and tests can be
@@ -70,4 +70,11 @@ the identity to the Reactor. `SessionManager` keeps connection-to-user and
 user-to-connection maps on the Reactor thread. A new authenticated connection
 replaces the previous one; disconnect removes its binding. Workers receive
 session copies, and expired sessions cannot authorize business requests or online
-routing. Network chat operations are still planned.
+routing.
+
+`send_message` validates recipients and stores one message with its delivery rows
+in a transaction. A worker returns a serialized notification and recipient user
+IDs. The Reactor looks up their current connections and queues online delivery,
+even if the sender disconnected after the task started. Exact sender retries
+reuse the stored ID and may notify recipients again. Offline replay, ACK handling,
+group chat, and file transfers remain planned. See [Messaging](messaging.md).

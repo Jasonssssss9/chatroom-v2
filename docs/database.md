@@ -78,8 +78,8 @@ exits; library cleanup happens after threads finish.
 
 A `Database` owns one connection and must stay on its creating thread. A
 `ChatStore` borrows it and must not outlive it. Different workers use different
-connections. HTTP and TCP authentication each reuse a private connection on their
-workers; a database error discards that connection. This module does not introduce
+connections. HTTP authentication and TCP handlers reuse a private connection on
+each worker; a database error discards that connection. This module does not introduce
 a shared connection pool. Blocking database work
 belongs on workers. The startup check runs before the event loop starts.
 
@@ -116,8 +116,8 @@ message. An upsert serializes concurrent attempts on that key. Exact retries
 return the original ID without creating deliveries. Changed text, group, or
 direct recipients raise `std::invalid_argument`. Group retries keep their original
 recipient snapshot even if members have joined since then. Deadlocks and other
-transient failures remain errors for the future service to handle; arbitrary
-writes are not retried automatically.
+transient failures become request errors; arbitrary writes are not retried
+automatically.
 
 `pending_messages()` returns the oldest unacknowledged messages, with a caller
 limit of 100 by default. It does not mark them delivered. After acknowledgment,
@@ -137,8 +137,10 @@ Upload/download I/O and file notifications remain service work.
 Field lengths and action-specific validation belong to those services; database
 constraints provide the final consistency check. HTTP registration and login now
 use the user operations. TCP authentication verifies the token's user through
-`user_by_id()`. Online delivery and reconnect scheduling are not implemented yet.
-The TCP actions are `ping` and `authenticate`.
+`user_by_id()`. `send_message` validates recipients and calls `save_direct_message()`
+before returning online notifications. Delivery rows remain unacknowledged,
+including after a successful socket send. Network ACK handling and reconnect
+replay are not implemented yet. See [Messaging](messaging.md).
 
 ## Integration Tests
 

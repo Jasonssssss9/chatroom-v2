@@ -102,25 +102,31 @@ RequestDispatcher::Completion RequestDispatcher::process(
     try {
         nlohmann::json response;
         std::optional<Session> authenticated;
+        std::optional<UserNotification> notification;
         try {
             request = parse_request(payload);
             auto result = handler_(id, request, session);
             response = std::move(result.response);
             authenticated = result.authenticated_session;
+            notification = std::move(result.notification);
         } catch (const ProtocolError& error) {
             request = error.request;
             response = make_error_response(request, error.code, error.what());
         }
+        if (notification && notification->payload.size() > kMaxFrameSize) {
+            response = make_error_response(request, "response_too_large", "Notification exceeds the 64 KiB limit");
+        }
         auto serialized = serialize_response(request, response);
         if (!response.value("ok", true)) {
             authenticated.reset();
+            notification.reset();
             const auto& error = response.at("error");
             log_request_error(id, request, error.at("code").get<std::string>(),
                               error.at("message").get<std::string>());
         } else {
             log(LogLevel::debug, "request_completed", request_context(id, request));
         }
-        return {std::move(serialized), authenticated, {request.request_id, request.action}};
+        return {std::move(serialized), authenticated, {request.request_id, request.action}, std::move(notification)};
     } catch (const std::exception& error) {
         log_request_error(id, request, "internal_error", error.what());
     } catch (...) {
@@ -133,10 +139,7 @@ RequestDispatcher::Completion RequestDispatcher::process(
 void RequestDispatcher::complete(ConnectionId id, Completion result) {
     --pending_requests_;
     auto it = requests_.find(id);
-    if (it == requests_.end()) {
-        return;
-    }
-    if (result.session) {
+    if (it != requests_.end() && result.session) {
         if (result.session->expired()) {
             // Verification or the completion queue may have outlasted the token.
             result.response = make_error_response(result.context, "invalid_token", "Token is invalid or expired").dump();
@@ -153,8 +156,19 @@ void RequestDispatcher::complete(ConnectionId id, Completion result) {
                 {{"connection_id", id}, {"user_id", result.session->user_id}});
         }
     }
-    it->second.active = false;
-    server_.send(id, result.response);
+    if (it != requests_.end()) {
+        it->second.active = false;
+        server_.send(id, result.response);
+    }
+    // A committed message remains deliverable even if its sender disconnected.
+    if (result.notification) {
+        for (const auto recipient : result.notification->recipients) {
+            if (const auto connection = sessions_.connection_for(recipient)) {
+                server_.send(*connection, result.notification->payload);
+            }
+        }
+    }
+    if (it == requests_.end()) return;
     if (it->second.waiting.empty()) {
         requests_.erase(it);
         server_.resume_close(id);

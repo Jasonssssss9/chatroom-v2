@@ -25,7 +25,7 @@ TEST_CASE("Unsupported actions return an error without claiming business support
           "[protocol][handler]") {
     const RequestHandler handler(kTestTokens, {});
     const Session session{42, std::chrono::system_clock::now() + std::chrono::hours(1)};
-    for (const auto* action : {"auth", "send_message", "create_group", "unknown"}) {
+    for (const auto* action : {"auth", "create_group", "unknown"}) {
         const json request{{"type", "request"}, {"request_id", "r1"}, {"action", action}};
         const auto response = handler.handle(request.dump(), session).response;
         CHECK(response["request_id"] == "r1");
@@ -97,4 +97,45 @@ TEST_CASE("A connection must reconnect to switch users", "[handler][auth]") {
         Request{"r1", "authenticate", {{"token", kTestTokens.issue(8)}}}, session);
     CHECK(result.response["error"]["code"] == "already_authenticated");
     CHECK_FALSE(result.authenticated_session);
+}
+
+TEST_CASE("Message input is validated before accessing MySQL", "[handler][message]") {
+    const RequestHandler handler(kTestTokens, {});
+    const Session session{7, std::chrono::system_clock::now() + std::chrono::hours(1)};
+    const json valid{{"client_message_id", "m1"}, {"recipients", {"8"}}, {"text", "Hello"}};
+    std::vector<json> invalid{json::object()};
+    for (const auto* field : {"client_message_id", "recipients", "text"}) {
+        auto data = valid;
+        data.erase(field);
+        invalid.push_back(std::move(data));
+        data = valid;
+        data[field] = nullptr;
+        invalid.push_back(std::move(data));
+    }
+    for (const auto& value : {json(""), json(42), json(std::string(65, 'x'))}) {
+        auto data = valid;
+        data["client_message_id"] = value;
+        invalid.push_back(std::move(data));
+    }
+    for (const auto& value : {json(""), json(42), json(std::string(4097, 'x'))}) {
+        auto data = valid;
+        data["text"] = value;
+        invalid.push_back(std::move(data));
+    }
+    for (const auto& value : {json::array(), json::object(), json("8"),
+                              json(std::vector<std::string>(65, "8")), json::array({8}),
+                              json::array({"0"}), json::array({""}), json::array({"08"}),
+                              json::array({"+8"}), json::array({"-8"}), json::array({"8tail"}),
+                              json::array({"18446744073709551616"})}) {
+        auto data = valid;
+        data["recipients"] = value;
+        invalid.push_back(std::move(data));
+    }
+    for (const auto& data : invalid) {
+        const auto result = handler.handle(Request{"r1", "send_message", data}, session);
+        CHECK(result.response["request_id"] == "r1");
+        CHECK(result.response["action"] == "send_message");
+        CHECK(result.response["error"]["code"] == "invalid_request");
+        CHECK_FALSE(result.notification);
+    }
 }

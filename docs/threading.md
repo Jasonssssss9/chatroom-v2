@@ -17,7 +17,7 @@ See [HTTP Authentication](authentication.md) for HTTP limits and lifetimes.
 | `ThreadPool` | A FIFO task queue, fixed workers, and shutdown that joins them |
 | `RequestDispatcher` | Per-connection sequencing and handing results back to the Reactor |
 | `SessionManager` | Reactor-owned user bindings and online routing |
-| `RequestHandler` | `ping`, JWT authentication, and the session requirement for other actions |
+| `RequestHandler` | Authentication, message validation and persistence, and response construction |
 
 The pool knows nothing about connections, JSON, or chat operations. Its workers
 wait on a condition variable when the task queue is empty. They release the queue
@@ -40,6 +40,7 @@ Worker: parse the request envelope
 Reactor: wake through eventfd and apply the completion
     -> apply successful authentication, replacing any previous online connection
     -> queue the response for socket output
+    -> route any message notification to recipients' current online connections
     -> submit the next request for that connection
 ```
 
@@ -123,9 +124,16 @@ request, together with an optional session copy. It may be invoked concurrently
 for different connections, so shared service dependencies must support concurrent
 calls. `RequestHandler` holds immutable configuration and a shared token service;
 its database connection is private to each worker. It returns a `RequestResult`
-containing JSON and an optional authenticated identity. Serialization failures
-and oversized responses discard that identity. The Reactor checks expiry again
-before binding it. See [MySQL Persistence](database.md).
+containing JSON, an optional authenticated identity, and an optional serialized
+`UserNotification` with recipient user IDs. Serialization failures and oversized
+results discard these effects. The Reactor checks expiry again before binding an
+identity. See [MySQL Persistence](database.md).
+
+The handler serializes message notifications on its worker after the database
+transaction commits. The dispatcher checks their frame length before posting a
+completion. Online routing happens only on the Reactor, using user IDs rather
+than connection references captured by workers. Offline and expired recipients
+are skipped; their database deliveries remain pending.
 
 Only Reactor callbacks modify the request map, session maps, and network state.
 Completions look up the ID again. They do not reuse a connection reference captured
@@ -133,11 +141,13 @@ when the request arrived.
 
 ## Disconnects and EOF
 
-A disconnect callback removes the session and that connection's application queue. Waiting requests
+A disconnect callback removes the session and that connection's application queue.
+Waiting requests
 are discarded and release their global slots. A task already submitted to the pool
 may still finish. Its completion releases its slot, finds no connection queue, and
-discards the response and any authentication result. This does not cancel or roll back work already performed by
-a handler.
+discards the response and any authentication result. A committed message's
+notification is still routed to online recipients. Disconnect does not cancel or
+roll back work already performed by a handler.
 
 A TCP FIN closes only the peer's sending direction. Clients using piped input still
 need their replies after sending FIN. `RequestDispatcher` therefore calls
@@ -167,6 +177,10 @@ Reactor. The limit counts serialized bytes, including escaped error messages;
 exactly 65,536 bytes is allowed. This advances the request queue normally and keeps
 both the connection and the event loop running. The framing library retains its
 own length check for other callers.
+
+Notifications use the same frame limit. An oversized notification produces
+`response_too_large` and is not routed. Message text is limited to 4,096 bytes so
+normal notifications fit even when JSON must escape every character.
 
 An unexpected handler exception or response serialization failure is logged and
 becomes a correlated `internal_error` response with the message
@@ -209,6 +223,8 @@ with an active task, fixed worker count, and draining the pool queue.
 Capacity tests also cover overload isolation, dropping waiting requests, retaining
 submitted tasks after disconnect, reusing released slots, and errors with a budget
 of one request.
+Notification tests cover a disconnected sender, a recipient changing connections
+during active work, and oversized results that must not reach recipients.
 
 ```bash
 ./build/tests/chatroom_tests "[thread_pool]"
