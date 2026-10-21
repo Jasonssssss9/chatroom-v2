@@ -3,9 +3,12 @@
 
 #include <cerrno>
 #include <charconv>
+#include <iomanip>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <poll.h>
+#include <random>
+#include <sstream>
 #include <stdexcept>
 #include <sys/eventfd.h>
 #include <system_error>
@@ -13,33 +16,86 @@
 
 namespace chatroom {
 namespace {
-std::optional<std::string> notification_id(std::string_view payload) {
-    try {
-        const auto message = parse_json(payload);
-        if (!message.is_object() || message.value("type", nlohmann::json{}) != "notification" ||
-            message.value("action", nlohmann::json{}) != "message") return std::nullopt;
-        const auto data = message.find("data");
-        if (data == message.end() || !data->is_object()) return std::nullopt;
-        for (const auto* field : {"sender_id", "client_message_id", "text"}) {
-            const auto value = data->find(field);
-            if (value == data->end() || !value->is_string()) return std::nullopt;
+const char* kHelp = "Commands:\n"
+    "  /register <username> <password>  Create an account\n"
+    "  /login <username> <password>     Log in and authenticate TCP\n"
+    "  /send <id[,id...]> <text>        Send a message to user IDs\n"
+    "  /ping                           Check the TCP connection\n"
+    "  /help                           Show these commands\n"
+    "  /quit                           Disconnect\n"
+    "Quote usernames or passwords that contain spaces. JSON requests are also accepted.\n";
+
+bool valid_id(std::string_view text) {
+    std::uint64_t id = 0;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), id);
+    return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() &&
+           id != 0 && text.front() != '0';
+}
+
+std::string random_prefix() {
+    std::random_device random;
+    std::ostringstream prefix;
+    prefix << std::hex << std::setfill('0');
+    for (int i = 0; i < 4; ++i) prefix << std::setw(8) << random();
+    return prefix.str();
+}
+
+std::string field(const nlohmann::json& object, const char* name) {
+    const auto value = object.find(name);
+    return value != object.end() && value->is_string() ? value->get<std::string>() : std::string{};
+}
+
+// Keep UTF-8 readable while escaping terminal controls, newlines, and backslashes.
+std::string visible(const std::string& text) {
+    const auto encoded = nlohmann::json(text).dump();
+    return encoded.substr(1, encoded.size() - 2);
+}
+
+std::string format_message(const nlohmann::json& message) {
+    const auto type = field(message, "type");
+    const auto action = field(message, "action");
+    if (type == "response" && message.value("ok", nlohmann::json{}) == false) {
+        const auto error = message.find("error");
+        if (error != message.end() && error->is_object()) {
+            return "Error [" + visible(action) + "]: " + visible(field(*error, "code")) +
+                   ": " + visible(field(*error, "message"));
         }
-        const auto value = data->find("message_id");
-        if (value == data->end() || !value->is_string()) return std::nullopt;
-        const auto& text = value->get_ref<const std::string&>();
-        std::uint64_t id = 0;
-        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), id);
-        if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() &&
-            id != 0 && text.front() != '0') return text;
-    } catch (const ProtocolError&) {
-        // Keep displaying unexpected server payloads without acknowledging them.
     }
+    const auto data = message.find("data");
+    if (data == message.end() || !data->is_object()) return "Server: " + message.dump();
+    if (type == "notification" && action == "message") {
+        return "[message " + visible(field(*data, "message_id")) + "] user " +
+               visible(field(*data, "sender_id")) + ": " + visible(field(*data, "text"));
+    }
+    if (type == "response" && message.value("ok", nlohmann::json{}) == true) {
+        if (action == "ack_message") return {};
+        if (action == "authenticate") return "Authenticated as user " + visible(field(*data, "user_id")) + ".";
+        if (action == "send_message") return "Sent message " + visible(field(*data, "message_id")) + ".";
+        if (action == "ping") return "Pong.";
+    }
+    return "Server: " + message.dump();
+}
+
+std::optional<std::string> notification_id(const nlohmann::json& message) {
+    if (!message.is_object() || message.value("type", nlohmann::json{}) != "notification" ||
+        message.value("action", nlohmann::json{}) != "message") return std::nullopt;
+    const auto data = message.find("data");
+    if (data == message.end() || !data->is_object()) return std::nullopt;
+    for (const auto* name : {"sender_id", "client_message_id", "text"}) {
+        const auto value = data->find(name);
+        if (value == data->end() || !value->is_string()) return std::nullopt;
+    }
+    const auto value = data->find("message_id");
+    if (value == data->end() || !value->is_string()) return std::nullopt;
+    const auto& text = value->get_ref<const std::string&>();
+    if (valid_id(text)) return text;
     return std::nullopt;
 }
 } // namespace
 
-ConsoleClient::ConsoleClient(TcpClient& client)
-    : client_(client), receiver_done_(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)) {
+ConsoleClient::ConsoleClient(TcpClient& client, AuthClient& auth, bool json_output)
+    : client_(client), auth_(auth), json_output_(json_output), message_prefix_(random_prefix()),
+      receiver_done_(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)) {
     if (receiver_done_.get() < 0) {
         throw std::system_error(errno, std::generic_category(), "eventfd");
     }
@@ -60,13 +116,79 @@ bool ConsoleClient::send_line(std::string_view line) {
     if (line.empty()) {
         return true;
     }
+    if (line.front() == '/') {
+        try { return handle_command(line); }
+        catch (const std::invalid_argument& error) { print(std::string("Error: ") + error.what() + "\n> "); }
+        return true;
+    }
     if (!nlohmann::json::accept(line.begin(), line.end())) {
-        print("Invalid JSON. Enter a JSON request or /quit.\n> ");
+        print("Invalid input. Use /help for commands, or enter a JSON request.\n> ");
     } else {
         std::lock_guard<std::mutex> lock(send_mutex_);
         client_.send(line);
         print("> ");
     }
+    return true;
+}
+
+void ConsoleClient::send_request(const std::string& action, nlohmann::json data) {
+    const auto number = std::to_string(next_request_id_++);
+    if (action == "send_message") data["client_message_id"] = message_prefix_ + "-" + number;
+    const auto payload = nlohmann::json{{"type", "request"}, {"request_id", "cli-" + number},
+                                       {"action", action}, {"data", std::move(data)}}.dump();
+    std::lock_guard<std::mutex> lock(send_mutex_);
+    client_.send(payload);
+}
+
+bool ConsoleClient::handle_command(std::string_view line) {
+    std::istringstream input{std::string(line)};
+    std::string command, extra;
+    input >> command;
+    if (command == "/help" || command == "/ping" || command == "/quit") {
+        if (input >> extra) throw std::invalid_argument("This command takes no arguments");
+        if (command == "/quit") return false;
+        if (command == "/help") print(kHelp);
+        else send_request("ping");
+    } else if (command == "/register" || command == "/login") {
+        std::string username, password;
+        if (!(input >> std::quoted(username) >> std::quoted(password)) || (input >> extra)) {
+            throw std::invalid_argument("Usage: " + command + " <username> <password>");
+        }
+        std::string token;
+        try {
+            if (command == "/register") {
+                const auto id = auth_.register_user(username, password);
+                print("Registered user " + visible(id) + ". Use /login to sign in.\n> ");
+                return true;
+            }
+            token = auth_.login(username, password);
+        } catch (const std::exception& error) {
+            print("Error: " + visible(error.what()) + "\n> ");
+            return true;
+        }
+        send_request("authenticate", {{"token", token}});
+    } else if (command == "/send") {
+        std::string recipients, text;
+        input >> recipients;
+        std::getline(input >> std::ws, text);
+        if (recipients.empty() || text.empty()) throw std::invalid_argument("Usage: /send <id[,id...]> <text>");
+        if (text.size() > 4096) throw std::invalid_argument("Message text must contain 1 to 4096 bytes");
+        auto ids = nlohmann::json::array();
+        std::string_view remaining(recipients);
+        while (true) {
+            const auto comma = remaining.find(',');
+            const auto id = remaining.substr(0, comma);
+            if (!valid_id(id)) throw std::invalid_argument("Recipients must be positive user IDs separated by commas");
+            ids.push_back(std::string(id));
+            if (comma == std::string_view::npos) break;
+            remaining.remove_prefix(comma + 1);
+        }
+        if (ids.size() > 64) throw std::invalid_argument("A message accepts at most 64 recipient IDs");
+        send_request("send_message", {{"recipients", std::move(ids)}, {"text", text}});
+    } else {
+        throw std::invalid_argument("Unknown command. Use /help to list commands");
+    }
+    print("> ");
     return true;
 }
 
@@ -125,9 +247,16 @@ ConsoleClient::InputResult ConsoleClient::read_input() {
 }
 
 void ConsoleClient::display_message(std::string_view payload) {
-    const auto id = notification_id(payload);
+    nlohmann::json message;
+    try { message = parse_json(payload); }
+    catch (const ProtocolError&) {
+        print(json_output_ ? "\n< " + std::string(payload) + "\n> " : "\nInvalid server JSON.\n> ");
+        return;
+    }
+    const auto id = notification_id(message);
     if (!id) {
-        print("\n< " + std::string(payload) + "\n> ");
+        const auto text = json_output_ ? "< " + std::string(payload) : format_message(message);
+        if (!text.empty()) print("\n" + text + "\n> ");
         return;
     }
     if (received_messages_.insert(*id).second) {
@@ -137,7 +266,7 @@ void ConsoleClient::display_message(std::string_view payload) {
             received_messages_.erase(recent_messages_.front());
             recent_messages_.pop_front();
         }
-        print("\n< " + std::string(payload) + "\n> ");
+        print("\n" + (json_output_ ? "< " + std::string(payload) : format_message(message)) + "\n> ");
     }
     const auto ack = nlohmann::json{{"type", "request"}, {"request_id", "ack-" + *id},
         {"action", "ack_message"}, {"data", {{"message_id", *id}}}}.dump();
@@ -162,7 +291,7 @@ void ConsoleClient::receive_messages() {
 }
 
 void ConsoleClient::run() {
-    print("Enter one JSON request per line. Use /quit to disconnect.\n> ");
+    print("Use /help for commands. JSON requests are also accepted.\n> ");
     std::thread receiver([this] { receive_messages(); });
     InputResult result;
     try {

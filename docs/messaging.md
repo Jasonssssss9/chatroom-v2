@@ -2,7 +2,8 @@
 
 The server supports persisted text messages between authenticated TCP clients.
 Private messages and multi-recipient sends use the same `send_message` action.
-The command-line client already displays both responses and notifications as JSON.
+The command-line client provides chat commands, readable messages, and automatic
+acknowledgments. Use `--json` when you need raw TCP payloads.
 
 ## Try Two Clients
 
@@ -10,63 +11,69 @@ Start the server with MySQL and JWT environment variables configured as describe
 in [Authentication](authentication.md). Its default HTTP and TCP ports are 8080
 and 8081.
 
-Register `alice` and `bob` through `POST /api/users`, then log in through
-`POST /api/auth/token`. Follow the curl examples in the authentication guide.
-Keep each account's JWT and user ID from its registration response. The IDs below
-are examples; replace them with the actual IDs in your database.
-
 In Alice's terminal, start the client:
 
 ```bash
 ./build/client/chatroom_client 127.0.0.1 8081
 ```
 
-Authenticate with Alice's token:
+Register and log in as Alice:
 
-```json
-{"type":"request","request_id":"alice-auth","action":"authenticate","data":{"token":"<ALICE_JWT>"}}
+```text
+/register alice example-password
+/login alice example-password
 ```
 
-Start a second client in Bob's terminal and authenticate with Bob's token:
+The client prints Alice's user ID after registration and confirms TCP
+authentication after login. It handles HTTP and the JWT automatically.
 
-```json
-{"type":"request","request_id":"bob-auth","action":"authenticate","data":{"token":"<BOB_JWT>"}}
+Start a second client in Bob's terminal:
+
+```bash
+./build/client/chatroom_client 127.0.0.1 8081
 ```
 
-After both authentication responses succeed, Alice can send to Bob. This example
-assumes Alice's ID is `"1"` and Bob's is `"2"`:
-
-```json
-{"type":"request","request_id":"send-1","action":"send_message","data":{"client_message_id":"alice-1","recipients":["2"],"text":"Hello Bob"}}
+```text
+/register bob example-password
+/login bob example-password
 ```
 
-Alice receives a response containing the persisted message ID:
+Use the actual registration IDs below. If Alice's ID is 1 and Bob's is 2, Alice
+can send:
 
-```json
-{"type":"response","request_id":"send-1","action":"send_message","ok":true,"data":{"message_id":"105"}}
+```text
+/send 2 Hello Bob
 ```
 
-Bob receives a notification without sending a request:
+Alice sees the persisted message ID:
 
-```json
-{"type":"notification","action":"message","data":{"message_id":"105","sender_id":"1","client_message_id":"alice-1","text":"Hello Bob"}}
+```text
+Sent message 105.
 ```
 
-Bob can reply to Alice with his own client message ID:
+Bob receives the message and automatically acknowledges it:
 
-```json
-{"type":"request","request_id":"reply-1","action":"send_message","data":{"client_message_id":"bob-1","recipients":["1"],"text":"Hi Alice"}}
+```text
+[message 105] user 1: Hello Bob
 ```
 
-Use `/quit` to exit. Authenticate again after reconnecting. If a token expires,
-log in through HTTP again and send `authenticate` with the new token.
+Bob can reply:
+
+```text
+/send 1 Hi Alice
+```
+
+Use `/quit` to exit and `/login` after reconnecting. If a token expires, use
+`/login` again for the same account. For a different HTTP port, supply it as the
+third positional argument. See [Command-Line Client](client.md) for quoting and
+display modes, and [JSON Protocol](protocol.md) for wire-format examples.
 
 ## Multiple Recipients and Retries
 
-Add user IDs to the same recipient array:
+Separate recipient IDs with commas:
 
-```json
-{"type":"request","request_id":"send-2","action":"send_message","data":{"client_message_id":"alice-2","recipients":["2","3"],"text":"Hello everyone"}}
+```text
+/send 2,3 Hello everyone
 ```
 
 Both users must exist. They share one stored message and message ID, with a
@@ -74,7 +81,8 @@ delivery row for each recipient. Repeated IDs are merged. You may include your
 own ID. Online recipients get notifications; offline deliveries stay in MySQL.
 See [JSON Protocol](protocol.md#send_message) for field limits and error codes.
 
-Choose a new `client_message_id` for each new outgoing message. For an uncertain
+The `/send` command generates a fresh client message ID automatically. In raw
+JSON clients, choose a new `client_message_id` for each new outgoing message. For an uncertain
 send result, retry with the same client ID, text, and recipient set. The response
 uses the existing message ID; it does not create another message or delivery.
 Notifications can repeat. The console client displays a message once while its

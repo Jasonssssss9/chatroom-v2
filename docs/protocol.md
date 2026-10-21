@@ -214,7 +214,8 @@ because it is not the result of a client request. Each delivery carries a
 data. It currently ignores extra data fields. It does not authenticate the connection,
 query a database, or establish a heartbeat timeout.
 
-A complete request that can be entered in the command-line client is:
+A complete request that can be entered in the command-line client is shown below.
+The `/ping` command builds one automatically; `--json` displays raw responses.
 
 ```json
 {"type":"request","request_id":"ping-1","action":"ping","data":{}}
@@ -229,8 +230,8 @@ The shorter form is also valid:
 Each admitted request normally produces one response. Multiple requests can use
 the same TCP connection. If a request-capacity limit is exceeded, the server closes
 the connection and may discard pending replies; it does not queue an extra error
-response. See [Request Capacity](threading.md#request-capacity). The client displays
-responses with a `<` prefix; that prefix is not part of the wire message.
+response. See [Request Capacity](threading.md#request-capacity). In `--json` mode,
+the client displays responses with a `<` prefix; that prefix is not part of the wire message.
 
 ### authenticate
 

@@ -1,4 +1,5 @@
 #include "net/tcp_client.h"
+#include "auth_client.h"
 #include "protocol.h"
 
 #include <arpa/inet.h>
@@ -131,16 +132,23 @@ private:
 // Exercise the real console with piped input, without changing the test runner's stdin.
 class ConsoleProcess {
 public:
-    explicit ConsoleProcess(std::uint16_t port) {
+    explicit ConsoleProcess(std::uint16_t port, std::uint16_t http_port = 8080, bool json_output = true) {
         auto input = pipe();
         auto output = pipe();
         const auto port_text = std::to_string(port);
+        const auto http_text = std::to_string(http_port);
         pid_ = ::fork();
         check_socket(pid_, "fork");
         if (pid_ == 0) {
             if (::dup2(input[0].get(), STDIN_FILENO) < 0 ||
                 ::dup2(output[1].get(), STDOUT_FILENO) < 0) ::_exit(127);
-            ::execl(CHATROOM_CLIENT_PATH, CHATROOM_CLIENT_PATH, "127.0.0.1", port_text.c_str(), nullptr);
+            if (json_output) {
+                ::execl(CHATROOM_CLIENT_PATH, CHATROOM_CLIENT_PATH, "--json", "127.0.0.1",
+                        port_text.c_str(), http_text.c_str(), nullptr);
+            } else {
+                ::execl(CHATROOM_CLIENT_PATH, CHATROOM_CLIENT_PATH, "127.0.0.1",
+                        port_text.c_str(), http_text.c_str(), nullptr);
+            }
             ::_exit(127);
         }
         input_ = std::move(input[1]);
@@ -202,7 +210,182 @@ private:
     UniqueFd output_;
     std::string text_;
 };
+
+class TestAuthServer {
+public:
+    explicit TestAuthServer(httplib::Server::Handler handler) {
+        server_.new_task_queue = [] { return new httplib::ThreadPool(1); };
+        server_.Post("/api/users", handler);
+        server_.Post("/api/auth/token", std::move(handler));
+        const int port = server_.bind_to_any_port("127.0.0.1");
+        if (port < 0) throw std::runtime_error("Cannot bind the test authentication server");
+        port_ = static_cast<std::uint16_t>(port);
+        thread_ = std::thread([this] { server_.listen_after_bind(); });
+        server_.wait_until_ready();
+    }
+    ~TestAuthServer() {
+        server_.stop();
+        if (thread_.joinable()) thread_.join();
+    }
+    std::uint16_t port() const { return port_; }
+
+private:
+    httplib::Server server_;
+    std::uint16_t port_;
+    std::thread thread_;
+};
 } // namespace
+
+TEST_CASE("HTTP client sends exact credentials and validates registration and login results", "[client][http]") {
+    TestAuthServer server([](const httplib::Request& request, httplib::Response& response) {
+        const auto data = parse_json(request.body);
+        if (request.get_header_value("Content-Type") != "application/json" ||
+            data != nlohmann::json{{"username", "name with spaces"}, {"password", "a password"}}) {
+            response.status = 400;
+            response.set_content(R"({"error":{"code":"bad_test_request","message":"Credentials changed"}})", "application/json");
+        } else if (request.path == "/api/users") {
+            response.status = 201;
+            response.set_content(R"({"id":"7","username":"name with spaces"})", "application/json");
+        } else {
+            response.set_content(R"({"access_token":"test-token","token_type":"Bearer","expires_in":60})", "application/json");
+        }
+    });
+    AuthClient auth("127.0.0.1", server.port());
+    CHECK(auth.register_user("name with spaces", "a password") == "7");
+    CHECK(auth.login("name with spaces", "a password") == "test-token");
+    CHECK_THROWS_AS(auth.login("", "a password"), std::invalid_argument);
+    CHECK_THROWS_AS(auth.register_user("alice", "short"), std::invalid_argument);
+}
+
+TEST_CASE("HTTP client reports service errors and rejects malformed authentication responses", "[client][http]") {
+    int status = 401;
+    std::string body = R"({"error":{"code":"invalid_credentials","message":"Invalid username or password"}})";
+    std::string expected = "invalid_credentials: Invalid username or password";
+    SECTION("Service error") {}
+    SECTION("Unexpected HTTP status") { status = 503; body = "{}"; expected = "Authentication HTTP status 503"; }
+    SECTION("Malformed JSON") { body = "{broken"; expected = "Authentication service returned invalid JSON"; }
+    SECTION("Excessive nesting") { body = std::string(65, '[') + "0" + std::string(65, ']'); expected = "Authentication service returned invalid JSON"; }
+    SECTION("Wrong root type") { body = "[]"; expected = "Authentication service returned an invalid response"; }
+    SECTION("Missing token") { status = 200; body = "{}"; expected = "Login response is missing a valid access token"; }
+    SECTION("Wrong token type") { status = 200; body = R"({"access_token":7})"; expected = "Login response is missing a valid access token"; }
+    SECTION("Oversized token") { status = 200; body = nlohmann::json{{"access_token", std::string(4097, 'x')}}.dump(); expected = "Login response is missing a valid access token"; }
+    TestAuthServer server([status, body](const auto&, auto& response) {
+        response.status = status;
+        response.set_content(body, "application/json");
+    });
+    AuthClient auth("127.0.0.1", server.port());
+    CHECK_THROWS_WITH(auth.login("alice", "a password"), expected);
+}
+
+TEST_CASE("HTTP registration reports conflicts and rejects invalid user ID responses", "[client][http]") {
+    int status = 409;
+    std::string body = R"({"error":{"code":"username_taken","message":"Username is already registered"}})";
+    std::string expected = "username_taken: Username is already registered";
+    SECTION("Duplicate username") {}
+    SECTION("Missing ID") { status = 201; body = "{}"; expected = "Registration response is missing the user ID"; }
+    SECTION("Numeric ID") { status = 201; body = R"({"id":7})"; expected = "Registration response is missing the user ID"; }
+    SECTION("Empty ID") { status = 201; body = R"({"id":""})"; expected = "Registration response is missing the user ID"; }
+    TestAuthServer server([status, body](const auto&, auto& response) {
+        response.status = status;
+        response.set_content(body, "application/json");
+    });
+    AuthClient auth("127.0.0.1", server.port());
+    CHECK_THROWS_WITH(auth.register_user("alice", "a password"), expected);
+}
+
+TEST_CASE("HTTP authentication bounds response size and reports unavailable endpoints", "[client][http]") {
+    SECTION("Oversized response") {
+        TestAuthServer server([](const auto&, auto& response) {
+            response.set_content(std::string(9000, 'x'), "application/json");
+        });
+        AuthClient auth("127.0.0.1", server.port());
+        CHECK_THROWS_AS(auth.login("alice", "a password"), std::runtime_error);
+    }
+    SECTION("Connection refused") {
+        UniqueFd socket(::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0));
+        REQUIRE(socket.get() >= 0);
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        REQUIRE(::bind(socket.get(), reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
+        socklen_t size = sizeof(address);
+        REQUIRE(::getsockname(socket.get(), reinterpret_cast<sockaddr*>(&address), &size) == 0);
+        AuthClient auth("127.0.0.1", ntohs(address.sin_port));
+        CHECK_THROWS_AS(auth.login("alice", "a password"), std::runtime_error);
+    }
+}
+
+TEST_CASE("Console commands register, log in, authenticate TCP, and display chat without tokens",
+          "[client][console][commands]") {
+    TestAuthServer http([](const auto& request, auto& response) {
+        const auto credentials = parse_json(request.body);
+        if (credentials["username"] != "alice with spaces" || credentials["password"] != "a password") {
+            response.status = 401;
+            response.set_content(R"({"error":{"code":"invalid_credentials","message":"Invalid username or password"}})", "application/json");
+        } else if (request.path == "/api/users") {
+            response.status = 201;
+            response.set_content(R"({"id":"7"})", "application/json");
+        } else {
+            response.set_content(R"({"access_token":"private-test-token"})", "application/json");
+        }
+    });
+    TestPeer peer([](int fd) {
+        const auto auth = parse_request(receive_payload(fd));
+        if (auth.action != "authenticate" || auth.data["token"] != "private-test-token") {
+            throw std::runtime_error("Login did not authenticate TCP");
+        }
+        send_bytes(fd, encode_frame(make_response(auth, {{"user_id", "7"}}).dump()));
+        const auto message = parse_request(receive_payload(fd));
+        if (message.action != "send_message" || message.data["recipients"] != nlohmann::json::array({"8", "9"}) ||
+            message.data["text"] != "Hello both users" || message.data["client_message_id"].get<std::string>().size() > 64) {
+            throw std::runtime_error("Incorrect outgoing message");
+        }
+        send_bytes(fd, encode_frame(make_response(message, {{"message_id", "101"}}).dump()));
+        send_bytes(fd, encode_frame(make_notification("message", {{"message_id", "102"}, {"sender_id", "8"},
+            {"client_message_id", "reply"}, {"text", "Hi\nthere\x1b"}}).dump()));
+        for (int i = 0; i < 2; ++i) {
+            const auto request = parse_request(receive_payload(fd));
+            if (request.action == "ack_message") send_bytes(fd, encode_frame(make_response(request).dump()));
+            else if (request.action == "ping") send_bytes(fd, encode_frame(make_response(request, {{"pong", true}}).dump()));
+            else throw std::runtime_error("Unexpected command request");
+        }
+    });
+    ConsoleProcess console(peer.port(), http.port(), false);
+    console.write("/register \"alice with spaces\" \"a password\"\n");
+    console.read_until("Registered user 7");
+    console.write("/login \"alice with spaces\" wrong-password\n");
+    console.read_until("invalid_credentials");
+    console.write("/login \"alice with spaces\" \"a password\"\n");
+    console.read_until("Authenticated as user 7");
+    console.write("/send 8,9 Hello both users\n");
+    console.read_until("user 8: Hi\\nthere\\u001b");
+    console.write("/ping\n");
+    const auto& output = console.read_until("Disconnected.");
+    CHECK(output.find("Sent message 101") != std::string::npos);
+    CHECK(output.find("Pong.") != std::string::npos);
+    CHECK(output.find("private-test-token") == std::string::npos);
+    CHECK(output.find("\x1b") == std::string::npos);
+    console.check();
+    peer.check();
+}
+
+TEST_CASE("Invalid console commands leave the connection usable", "[client][console][commands]") {
+    TestPeer peer([](int fd) {
+        const auto request = parse_request(receive_payload(fd));
+        if (request.action != "ping") throw std::runtime_error("Invalid command reached the server");
+        send_bytes(fd, encode_frame(make_response(request, {{"pong", true}}).dump()));
+    });
+    ConsoleProcess console(peer.port(), 8080, false);
+    console.write("/help\n/unknown\n/login alice\n/register \"unfinished\n/send 0 Hello\n/send 8, Hello\n/ping extra\n");
+    console.write("/send 8 " + std::string(4097, 'x') + "\n/ping\n");
+    const auto& output = console.read_until("Disconnected.");
+    CHECK(output.find("Commands:") != std::string::npos);
+    CHECK(output.find("Unknown command") != std::string::npos);
+    CHECK(output.find("Usage: /login") != std::string::npos);
+    CHECK(output.find("Pong.") != std::string::npos);
+    console.check();
+    peer.check();
+}
 
 TEST_CASE("The client sends frames and retains consecutive replies", "[client]") {
     const std::string payload = std::string(u8"\u4f60\u597d") + std::string("\0end", 4);

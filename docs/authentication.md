@@ -114,7 +114,9 @@ binding connections to users.
 
 ## TCP Connection Authentication
 
-After HTTP login, send a framed JSON request through the existing command-line client:
+The console's `/login <username> <password>` command performs HTTP login and TCP
+authentication automatically. See [Command-Line Client](client.md). For a raw
+protocol client, obtain the JWT through HTTP and send a framed JSON request:
 
 ```json
 {"type":"request","request_id":"auth-1","action":"authenticate","data":{"token":"<JWT>"}}

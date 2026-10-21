@@ -47,6 +47,11 @@ connection with separate input and receive threads. Its library and tests can be
 built without the server. See [Networking](networking.md), [JSON Protocol](protocol.md),
 and [Worker Pool and Request Handoff](threading.md).
 
+The console provides registration, login, and messaging commands. Its `AuthClient`
+uses the same cpp-httplib dependency as the server, without linking server code.
+HTTP login passes the JWT directly to TCP authentication. Normal output formats
+messages and errors; `--json` preserves raw TCP display. See [Command-Line Client](client.md).
+
 JSON configuration and command-line options control the bind address, port, worker
 count, connection and request limits, and log level. The dispatcher limits
 unfinished requests, retaining submitted tasks in the global count after disconnect.

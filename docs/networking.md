@@ -13,7 +13,8 @@
 | `TcpConnection` | Owns one client's socket, input decoder, and buffered output |
 | `TcpServer` | Runs the Reactor, manages connections, and invokes application callbacks |
 | `TcpClient` | Owns one blocking IPv4 connection and sends or receives complete frames |
-| `ConsoleClient` | Coordinates terminal input, reply display, and receiver thread shutdown |
+| `AuthClient` | Performs HTTP registration and login on the input thread |
+| `ConsoleClient` | Handles commands, reply display, ACKs, and receiver thread shutdown |
 
 The implementation uses Linux socket APIs directly. Server sockets are non-blocking
 and close on exec. ET handlers accept, read, or write until `EAGAIN`; `EINTR` retries
@@ -161,6 +162,14 @@ standard input and that eventfd, so remote disconnects also wake terminal input.
 Output is serialized with a mutex. `/quit` cancels I/O immediately; standard-input
 EOF finishes sending and waits for the peer to close after its final replies.
 Ctrl+C uses normal process termination.
+
+Commands use an `AuthClient` for HTTP registration and login. The input thread
+performs these blocking calls while the receiver continues processing messages.
+Login returns a JWT directly to a generated TCP `authenticate` request. The
+client does not display or persist the token. `/send` generates a fresh client
+message ID; `/ping`, `/help`, and `/quit` complete the small command set. Normal
+output formats messages and errors; `--json` retains raw payload display.
+See [Command-Line Client](client.md) for syntax and examples.
 
 The receiver recognizes `message` notifications, suppresses recent duplicate IDs,
 and sends `ack_message` after display. It acknowledges duplicate copies too. A

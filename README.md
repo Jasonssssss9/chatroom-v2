@@ -7,8 +7,9 @@ chat, HTTP and JWT for authentication, and MySQL for users, groups, and messages
 File storage is planned on disk, with metadata in MySQL.
 
 The server and client network layers are implemented. The server accepts JSON
-requests, supports `ping`, `authenticate`, and `send_message`, and returns structured errors. The command-line client
-sends one JSON request per line.
+requests, supports `ping`, `authenticate`, `send_message`, and `ack_message`, and
+returns structured errors. The command-line client provides registration, login,
+and chat commands, with raw JSON available for debugging.
 Application requests run in order for each connection on a configurable worker
 pool (four threads by default). Their results return to the Reactor for socket output.
 JSON configuration, command-line overrides, environment-based credentials, and
@@ -52,6 +53,7 @@ See [Authentication](docs/authentication.md) for registration, login, JWTs,
 TCP sessions, HTTP settings, and examples.
 See [Messaging](docs/messaging.md) to chat between two command-line clients and
 understand persistence, retries, and online delivery.
+See [Command-Line Client](docs/client.md) for commands and display options.
 
 ## Building
 
@@ -60,7 +62,7 @@ Building the server also requires pkg-config, the MySQL client development libra
 and OpenSSL 3.0 or later (`sudo apt install pkg-config libmysqlclient-dev libssl-dev`
 on Ubuntu).
 The first configuration requires access to GitHub to download pinned versions of
-nlohmann/json and Catch2.
+nlohmann/json, cpp-httplib, and Catch2.
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
@@ -80,7 +82,8 @@ The build provides these targets:
 | `chatroom_http` | `server/CMakeLists.txt` | HTTP authentication listener and request logging |
 | `chatroom_server` | `server/CMakeLists.txt` | TCP chat and HTTP authentication server |
 | `chatroom_client_net` | `client/CMakeLists.txt` | Blocking TCP client library |
-| `chatroom_client` | `client/CMakeLists.txt` | Command-line JSON client |
+| `chatroom_client_app` | `client/CMakeLists.txt` | HTTP authentication and console commands |
+| `chatroom_client` | `client/CMakeLists.txt` | Command-line chat client |
 | `chatroom_tests` | `tests/CMakeLists.txt` | Catch2 tests, automatically registered with CTest |
 | `chatroom_database_tests` | `tests/CMakeLists.txt` | Optional MySQL and HTTP integration tests (`BUILD_DATABASE_TESTS=ON`) |
 
@@ -106,8 +109,9 @@ network. Shared code contains the protocol, framing, logging, and small resource
 dependencies belong in its own `CMakeLists.txt`; shared dependencies belong in
 `cmake/Dependencies.cmake`.
 
-The server additionally downloads pinned cpp-httplib and jwt-cpp releases and
-links system OpenSSL libraries. The standalone client needs neither dependency.
+Both components use the same pinned cpp-httplib release. The server additionally
+uses jwt-cpp and system OpenSSL libraries. The standalone client requires no
+MySQL, jwt-cpp, or OpenSSL development files.
 
 ## Running the Server
 
@@ -148,7 +152,7 @@ even after disconnect. See [Request Capacity](docs/threading.md#request-capacity
 
 Each request is a four-byte unsigned payload length in network byte order followed
 by UTF-8 JSON. A request must include `type`, `request_id`, and `action`; `data` is
-an optional object. The server supports `ping`, `authenticate`, and `send_message`. Invalid requests receive
+an optional object. The server supports `ping`, `authenticate`, `send_message`, and `ack_message`. Invalid requests receive
 structured error responses. JSON nesting is limited to 64 levels, counting the
 root object as level 1; oversized frames close the connection. See the
 [protocol reference](docs/protocol.md) for the complete format. Plain text sent
@@ -169,39 +173,24 @@ Start the server, then open another terminal:
 ./build/client/chatroom_client 127.0.0.1 8081
 ```
 
-The default destination is `127.0.0.1:8081`. Addresses must be numeric IPv4 addresses.
-Enter one complete JSON request per line:
+The default destination is `127.0.0.1:8081`, with HTTP on port 8080. Addresses must
+be numeric IPv4 addresses. Add an HTTP port as the third positional argument when
+needed: `chatroom_client 127.0.0.1 8081 8080`.
 
-```json
-{"type":"request","request_id":"ping-1","action":"ping"}
+```text
+/register alice example-password
+/login alice example-password
+/send 2 Hello Bob
+/send 2,3 Hello everyone
+/ping
+/help
 ```
 
-Replies appear with a `<` prefix and include the matching request ID. Invalid JSON
-syntax is rejected locally; envelope and action validation happen on the server.
-Input is limited to 64 KiB per line, excluding LF or CRLF. An oversized line is
-reported as soon as it exceeds the limit and discarded through its next newline;
-later lines can still be sent.
-
-After obtaining a JWT from HTTP login, bind this TCP connection to the user:
-
-```json
-{"type":"request","request_id":"auth-1","action":"authenticate","data":{"token":"<JWT>"}}
-```
-
-The response contains the authenticated `user_id`. A successful authentication on
-another connection closes the user's previous connection. See the
-[session rules](docs/authentication.md#tcp-connection-authentication) for expiry and refresh behavior.
-
-Once authenticated, send a message to another user's ID:
-
-```json
-{"type":"request","request_id":"send-1","action":"send_message","data":{"client_message_id":"alice-1","recipients":["2"],"text":"Hello Bob"}}
-```
-
-Replace `"2"` with the recipient's actual user ID. The sender receives a message
-ID after persistence; an online recipient receives a `message` notification.
-Add more IDs to `recipients` for a multi-recipient send. See the
-[two-client walkthrough](docs/messaging.md) for the complete flow.
+Registration prints the new user ID; use actual recipient IDs in `/send`. Login
+automatically authenticates TCP without displaying the JWT. Messages and errors
+appear as readable text, and the client automatically acknowledges deliveries.
+See the [client guide](docs/client.md) for quoted credentials, limits, and JSON
+debugging, or the [two-client walkthrough](docs/messaging.md) to try a conversation.
 
 Use `/quit` to cancel pending I/O and exit immediately. End standard input with
 Ctrl+D to finish sending and wait for the server's final replies. The client also
@@ -210,7 +199,7 @@ exits when the server disconnects, without requiring another line of input.
 Requests can also be piped into the client:
 
 ```bash
-printf '%s\n' '{"type":"request","request_id":"ping-1","action":"ping"}' | ./build/client/chatroom_client
+printf '%s\n' '/ping' | ./build/client/chatroom_client
 ```
 
 To run only the client network tests:
