@@ -50,11 +50,12 @@ int main(int argc, char* argv[]) {
                        {"database", config.database.name}});
         chatroom::TokenService tokens(config.jwt_secret, config.token_lifetime_seconds);
         chatroom::AuthService auth(tokens);
-        chatroom::RequestHandler handler;
+        chatroom::RequestHandler handler(tokens, config.database);
         chatroom::TcpServer server(config.port, config.address, config.max_connections);
         chatroom::RequestDispatcher dispatcher(
-            server, [&handler](chatroom::ConnectionId, const chatroom::Request& request) {
-                return handler.handle(request);
+            server, [&handler](chatroom::ConnectionId, const chatroom::Request& request,
+                               std::optional<chatroom::Session> session) {
+                return handler.handle(request, session);
             }, config.worker_threads, config.max_requests_per_connection, config.max_pending_requests);
         server.set_message_handler([&](chatroom::ConnectionId id, std::string payload) {
             dispatcher.enqueue(id, std::move(payload));

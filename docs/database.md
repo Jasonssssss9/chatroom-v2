@@ -78,8 +78,9 @@ exits; library cleanup happens after threads finish.
 
 A `Database` owns one connection and must stay on its creating thread. A
 `ChatStore` borrows it and must not outlive it. Different workers use different
-connections. Future handlers can reuse a connection within their worker; this
-module does not introduce a shared connection pool. Blocking database work
+connections. HTTP and TCP authentication each reuse a private connection on their
+workers; a database error discards that connection. This module does not introduce
+a shared connection pool. Blocking database work
 belongs on workers. The startup check runs before the event loop starts.
 
 `execute()` and `query()` use prepared statements. SQL text comes from application
@@ -135,8 +136,9 @@ Upload/download I/O and file notifications remain service work.
 
 Field lengths and action-specific validation belong to those services; database
 constraints provide the final consistency check. HTTP registration and login now
-use the user operations. TCP login, online delivery, and reconnect scheduling are
-not implemented here. The only TCP action remains `ping`.
+use the user operations. TCP authentication verifies the token's user through
+`user_by_id()`. Online delivery and reconnect scheduling are not implemented yet.
+The TCP actions are `ping` and `authenticate`.
 
 ## Integration Tests
 

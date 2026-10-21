@@ -2,12 +2,12 @@
 
 A chat server and command-line client for Linux, written in C++17.
 
-The planned server uses non-blocking TCP, epoll, and the Reactor pattern for real-time
+The server uses non-blocking TCP, epoll, and the Reactor pattern for real-time
 chat, HTTP and JWT for authentication, and MySQL for users, groups, and messages.
 Uploaded files are stored on disk, with their metadata in MySQL.
 
 The server and client network layers are implemented. The server accepts JSON
-requests, supports `ping`, and returns structured errors. The command-line client
+requests, supports `ping` and `authenticate`, and returns structured errors. The command-line client
 sends one JSON request per line.
 Application requests run in order for each connection on a configurable worker
 pool (four threads by default). Their results return to the Reactor for socket output.
@@ -16,8 +16,8 @@ structured server logs are implemented.
 MySQL connections, prepared statements, transactions, and persistence for users,
 groups, messages, acknowledgments, and file metadata are implemented. The server
 checks database connectivity at startup. HTTP registration, login, password hashing,
-and JWT issuance are implemented. TCP authentication and network chat operations
-are still planned.
+and JWT issuance are implemented. TCP verifies JWTs and binds users to connections,
+with one online connection per user. Network chat operations are still planned.
 
 ## Project Layout
 
@@ -45,8 +45,8 @@ See [Configuration and Logging](docs/configuration.md) for settings, environment
 variables, startup options, and log fields.
 See [MySQL Persistence](docs/database.md) for setup, schema, database operations,
 connection ownership, and integration tests.
-See [HTTP Authentication](docs/authentication.md) for registration, login, JWTs,
-HTTP settings, and curl examples.
+See [Authentication](docs/authentication.md) for registration, login, JWTs,
+TCP sessions, HTTP settings, and examples.
 
 ## Building
 
@@ -69,11 +69,11 @@ The build provides these targets:
 | --- | --- | --- |
 | `chatroom_common` | `common/CMakeLists.txt` | Shared framing, JSON protocol, and logging library |
 | `chatroom_net` | `server/CMakeLists.txt` | Server network library |
-| `chatroom_app` | `server/CMakeLists.txt` | Configuration, request dispatcher, handlers, and worker pool |
+| `chatroom_app` | `server/CMakeLists.txt` | Configuration, sessions, request dispatcher, handlers, and worker pool |
 | `chatroom_db` | `server/CMakeLists.txt` | MySQL connections, transactions, and chat persistence |
-| `chatroom_auth` | `server/CMakeLists.txt` | Password hashing, registration, login, and JWT issuance |
+| `chatroom_auth` | `server/CMakeLists.txt` | Password hashing, registration, login, and JWT issuance and verification |
 | `chatroom_http` | `server/CMakeLists.txt` | HTTP authentication listener and request logging |
-| `chatroom_server` | `server/CMakeLists.txt` | TCP ping and HTTP authentication server |
+| `chatroom_server` | `server/CMakeLists.txt` | TCP sessions and HTTP authentication server |
 | `chatroom_client_net` | `client/CMakeLists.txt` | Blocking TCP client library |
 | `chatroom_client` | `client/CMakeLists.txt` | Command-line JSON client |
 | `chatroom_tests` | `tests/CMakeLists.txt` | Catch2 tests, automatically registered with CTest |
@@ -143,7 +143,7 @@ even after disconnect. See [Request Capacity](docs/threading.md#request-capacity
 
 Each request is a four-byte unsigned payload length in network byte order followed
 by UTF-8 JSON. A request must include `type`, `request_id`, and `action`; `data` is
-an optional object. The server currently supports `ping`. Invalid requests receive
+an optional object. The server currently supports `ping` and `authenticate`. Invalid requests receive
 structured error responses. JSON nesting is limited to 64 levels, counting the
 root object as level 1; oversized frames close the connection. See the
 [protocol reference](docs/protocol.md) for the complete format. Plain text sent
@@ -173,6 +173,16 @@ Enter one complete JSON request per line:
 
 Replies appear with a `<` prefix and include the matching request ID. Invalid JSON
 syntax is rejected locally; envelope and action validation happen on the server.
+
+After obtaining a JWT from HTTP login, bind this TCP connection to the user:
+
+```json
+{"type":"request","request_id":"auth-1","action":"authenticate","data":{"token":"<JWT>"}}
+```
+
+The response contains the authenticated `user_id`. A successful authentication on
+another connection closes the user's previous connection. See the
+[session rules](docs/authentication.md#tcp-connection-authentication) for expiry and refresh behavior.
 
 Use `/quit` to cancel pending I/O and exit immediately. End standard input with
 Ctrl+D to finish sending and wait for the server's final replies. The client also

@@ -10,11 +10,12 @@ The server currently supports:
 
 - Parsing and validating request envelopes.
 - A correlated response to `ping`.
+- JWT authentication with `authenticate` and Reactor-owned user sessions.
 - Consistent errors for malformed JSON, invalid requests, and unsupported actions.
 - Building notification envelopes for future server-initiated messages.
 
-Only `ping` is dispatched. Authentication, messages, groups, acknowledgments, and
-file transfers are not implemented yet. They do not return success placeholders.
+Only `ping` and `authenticate` are dispatched. Messages, groups, acknowledgments,
+and file transfers are not implemented yet. They do not return success placeholders.
 
 ## 2. Framing
 
@@ -202,7 +203,9 @@ A notification has an action and object data. It has no `request_id` or `ok` fie
 because it is not the result of a client request. Future persistent deliveries will
 carry a `message_id` in their data so receivers can acknowledge and deduplicate them.
 
-## 4. Implemented Action: ping
+## 4. Implemented Actions
+
+### ping
 
 `ping` accepts omitted or object data and returns `{"pong":true}` in the response
 data. It currently ignores extra data fields. It does not authenticate the connection,
@@ -226,19 +229,44 @@ the connection and may discard pending replies; it does not queue an extra error
 response. See [Request Capacity](threading.md#request-capacity). The client displays
 responses with a `<` prefix; that prefix is not part of the wire message.
 
+### authenticate
+
+Obtain a token through HTTP login, then send:
+
+```json
+{"type":"request","request_id":"auth-1","action":"authenticate","data":{"token":"<JWT>"}}
+```
+
+`token` must contain 1 to 4,096 bytes. Success returns
+`{"user_id":"1"}` in response data. The identity is verified on a worker and
+bound on the Reactor before the next request starts. Every TCP action other than
+`ping` and `authenticate` requires an unexpired session. A successful
+authentication on another connection replaces the user's previous connection.
+The same connection can refresh its own identity; changing users requires a new
+connection. Failed authentication preserves any existing session.
+
+See [Authentication](authentication.md#tcp-connection-authentication) for token
+claims, expiration, duplicate login, and disconnect behavior.
+
 ## 5. Current Errors and Connection Behavior
 
 | Code | Cause | Connection |
 | --- | --- | --- |
 | `invalid_json` | Malformed JSON or invalid UTF-8 | Kept open |
 | `invalid_request` | Excessive JSON nesting, wrong root, type, metadata, or data type | Kept open |
-| `unknown_action` | Valid envelope with an unsupported action | Kept open |
+| `invalid_token` | Invalid or expired JWT, or token user no longer exists | Kept open |
+| `already_authenticated` | A bound connection attempts to change users | Kept open |
+| `authentication_required` | Action requires an unexpired session | Kept open |
+| `unknown_action` | Authenticated request with an unsupported action | Kept open |
 | `internal_error` | Unexpected application-handler or response serialization failure | Kept open |
 | `response_too_large` | Serialized response exceeds 65,536 bytes | Kept open |
 
 Envelope validation happens before action dispatch. Within an object, the parser
 checks `type`, `request_id`, `action`, then `data`, and reports the first failing
-rule. Correlation metadata is collected before these checks.
+rule. Correlation metadata is collected before these checks. Authentication input
+errors, including missing, non-string, empty, or oversized tokens, use
+`invalid_request`. Unsupported actions on unauthenticated or expired sessions use
+`authentication_required` before action dispatch.
 
 After an error, the next complete frame is a new request and is processed normally.
 Malformed JSON does not corrupt the framing of later requests. A worker replaces
@@ -266,14 +294,13 @@ The [v1 request dispatcher](https://github.com/Jasonssssss9/chatroom-server-v1/b
 used numeric codes and header fields. The table below keeps its user-facing
 features while assigning readable operation names and the appropriate transport.
 
-HTTP registration and login are implemented; see [HTTP Authentication](authentication.md).
-The other operations below remain planned. Every TCP action other than `ping`
-currently returns `unknown_action`.
+HTTP registration, login, and TCP authentication are implemented; see
+[Authentication](authentication.md). The other operations below remain planned.
 
 | v1 operation | v2 operation | Transport |
 | --- | --- | --- |
 | `010`: register | `POST /api/users` | HTTP |
-| `020`: login | `POST /api/auth/token`, followed by TCP `auth` | HTTP and TCP |
+| `020`: login | `POST /api/auth/token`, followed by TCP `authenticate` | HTTP and TCP |
 | `030`: logout | `logout` | TCP |
 | `110`: direct or multi-recipient message | `send_message` | TCP |
 | `210`: create group | `create_group` | TCP |
@@ -286,14 +313,14 @@ The planned action data is intentionally small:
 
 | Action | Planned data fields |
 | --- | --- |
-| `auth` | `token` |
+| `authenticate` (implemented) | `token` |
 | `send_message` | `client_message_id`, `recipients` (array of user ID strings), `text` |
 | `create_group` | `name`, `members` (array of user ID strings) |
 | `send_group_message` | `client_message_id`, `group_id`, `text` |
 | `ack` | `message_id` |
 | `logout` | Empty object |
 
-These payload fields will be implemented and validated with their business services.
+The remaining payload fields will be implemented and validated with their business services.
 The server will obtain the sender from the authenticated connection, not a
 client-supplied sender field. IDs are represented as strings in the protocol.
 File bytes will travel over HTTP; TCP notifications will reference the file ID.
@@ -318,7 +345,7 @@ FrameDecoder extracts a payload
     -> RequestDispatcher queues it by connection ID
     -> a worker parses the envelope and calls RequestHandler
     -> the worker serializes the response and posts a completion
-    -> the Reactor queues output and starts the next request
+    -> the Reactor applies any authentication result, queues output, and starts the next request
 ```
 
 `common/protocol.h` defines `Request`, `ProtocolError`, and message builders.

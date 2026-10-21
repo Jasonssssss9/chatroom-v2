@@ -28,6 +28,8 @@ using namespace chatroom;
 using namespace std::chrono_literals;
 
 namespace {
+const TokenService kTestTokens(std::string(32, 'k'));
+
 // Binds before starting the loop, so clients can connect without timing sleeps.
 class RunningServer {
 public:
@@ -43,10 +45,18 @@ public:
 
     ~RunningServer() { finish(); }
 
-    void use_workers(RequestDispatcher::Handler handler, std::size_t worker_count = 2,
+    void use_workers(std::function<nlohmann::json(ConnectionId, const Request&)> handler, std::size_t worker_count = 2,
                      std::size_t per_connection = 32, std::size_t total = 1024) {
+        use_session_workers(
+            [handler = std::move(handler)](ConnectionId id, const Request& request, std::optional<Session>) {
+                return RequestResult{handler(id, request)};
+            }, worker_count, per_connection, total);
+    }
+
+    void use_session_workers(RequestDispatcher::Handler handler, std::size_t worker_count = 2,
+                             std::size_t per_connection = 32, std::size_t total = 1024) {
         dispatcher = std::make_unique<RequestDispatcher>(server, std::move(handler), worker_count,
-                                                          per_connection, total);
+                                                         per_connection, total);
         server.set_message_handler([this](ConnectionId id, std::string payload) {
             dispatcher->enqueue(id, std::move(payload));
         });
@@ -420,7 +430,7 @@ TEST_CASE("Complete worker requests finish before closing a truncated stream",
     SECTION("Incomplete payload after several receive batches") { tail.pop_back(); }
     std::promise<void> started;
     auto active = started.get_future();
-    const RequestHandler handler;
+    const RequestHandler handler(kTestTokens, {});
     LogCapture logs;
     RunningServer fixture;
     TaskGate gate;
@@ -429,7 +439,7 @@ TEST_CASE("Complete worker requests finish before closing a truncated stream",
             started.set_value();
             wait.wait();
         }
-        return handler.handle(request);
+        return handler.handle(request).response;
     });
     // Queue the bytes and FIN before starting the loop, so EOF precedes task completion.
     auto client = connect_client(fixture.server.port());
@@ -546,10 +556,10 @@ TEST_CASE("Listener and accepted sockets are non-blocking and close on exec", "[
 }
 
 TEST_CASE("Protocol errors allow later requests on the same TCP connection", "[server][protocol]") {
-    const RequestHandler handler;
+    const RequestHandler handler(kTestTokens, {});
     RunningServer fixture;
     fixture.server.set_message_handler([&](ConnectionId id, std::string payload) {
-        fixture.server.send(id, handler.handle(payload).dump());
+        fixture.server.send(id, handler.handle(payload).response.dump());
     });
     fixture.start();
     auto client = connect_client(fixture.server.port());
@@ -606,10 +616,10 @@ TEST_CASE("Slow work leaves I/O responsive and preserves each connection's order
 }
 
 TEST_CASE("Half-closed clients receive every queued worker response", "[server][dispatcher]") {
-    const RequestHandler handler;
+    const RequestHandler handler(kTestTokens, {});
     RunningServer fixture;
     fixture.use_workers(
-        [&](ConnectionId, const Request& request) { return handler.handle(request); });
+        [&](ConnectionId, const Request& request) { return handler.handle(request).response; });
     fixture.start();
     auto client = connect_client(fixture.server.port());
     std::string frames;
@@ -685,7 +695,7 @@ TEST_CASE("Per-connection request limits close only the overloaded client",
     auto closed = disconnected.get_future();
     std::atomic<ConnectionId> old_id{0};
     std::atomic<int> waiting_executed{0};
-    const RequestHandler handler;
+    const RequestHandler handler(kTestTokens, {});
     RunningServer fixture;
     TaskGate gate;
     fixture.use_workers([&, wait = gate.future](ConnectionId id, const Request& request) {
@@ -696,7 +706,7 @@ TEST_CASE("Per-connection request limits close only the overloaded client",
             return make_response(request);
         }
         if (request.action == "waiting") ++waiting_executed;
-        return handler.handle(request);
+        return handler.handle(request).response;
     }, 2, 2, 64);
     fixture.server.set_disconnect_handler([&](ConnectionId id) {
         fixture.dispatcher->disconnect(id);
@@ -731,7 +741,7 @@ TEST_CASE("Disconnect releases waiting requests from the global budget",
     std::atomic<ConnectionId> old_id{0};
     std::atomic<int> waiting_executed{0};
     const std::string last = R"({"type":"request","request_id":"w2","action":"waiting"})";
-    const RequestHandler handler;
+    const RequestHandler handler(kTestTokens, {});
     RunningServer fixture;
     TaskGate gate;
     fixture.use_workers([&, wait = gate.future](ConnectionId id, const Request& request) {
@@ -742,7 +752,7 @@ TEST_CASE("Disconnect releases waiting requests from the global budget",
             return make_response(request);
         }
         if (request.action == "waiting") ++waiting_executed;
-        return handler.handle(request);
+        return handler.handle(request).response;
     }, 2, 3, 3);
     fixture.server.set_message_handler([&](ConnectionId id, std::string payload) {
         const bool final_waiting_request = payload == last;
@@ -787,7 +797,7 @@ TEST_CASE("Disconnected pool tasks retain their global slots until completion",
     std::atomic<ConnectionId> first_id{0};
     ConnectionId second_id = 0;
     const std::string waiting = R"({"type":"request","request_id":"q","action":"queued"})";
-    const RequestHandler handler;
+    const RequestHandler handler(kTestTokens, {});
     RunningServer fixture;
     TaskGate gate;
     fixture.use_workers([&, wait = gate.future](ConnectionId id, const Request& request) {
@@ -802,7 +812,7 @@ TEST_CASE("Disconnected pool tasks retain their global slots until completion",
             fixture.server.post([&] { completion_applied.set_value(); });
             return make_response(request);
         }
-        return handler.handle(request);
+        return handler.handle(request).response;
     }, 1, 4, 2);
     fixture.server.set_message_handler([&](ConnectionId id, std::string payload) {
         const bool pool_task = payload == waiting;
@@ -845,11 +855,11 @@ TEST_CASE("Disconnected pool tasks retain their global slots until completion",
 
 TEST_CASE("Error completions release request capacity for later requests",
           "[server][dispatcher][limits]") {
-    const RequestHandler handler;
+    const RequestHandler handler(kTestTokens, {});
     RunningServer fixture;
     fixture.use_workers([&](ConnectionId, const Request& request) {
         if (request.action == "fail") throw std::runtime_error("Expected handler failure");
-        return handler.handle(request);
+        return handler.handle(request).response;
     }, 1, 1, 1);
     fixture.start();
     auto client = connect_client(fixture.server.port());
@@ -865,13 +875,13 @@ TEST_CASE("Error completions release request capacity for later requests",
 }
 
 TEST_CASE("A failed worker request does not stall the next request", "[server][dispatcher]") {
-    const RequestHandler handler;
+    const RequestHandler handler(kTestTokens, {});
     RunningServer fixture;
     fixture.use_workers([&](ConnectionId, const Request& request) {
         if (request.action == "fail") {
             throw std::runtime_error("Expected handler failure");
         }
-        return handler.handle(request);
+        return handler.handle(request).response;
     });
     fixture.start();
     auto client = connect_client(fixture.server.port());
@@ -892,10 +902,10 @@ TEST_CASE("A failed worker request does not stall the next request", "[server][d
 
 TEST_CASE("Excessive JSON nesting does not stall later worker requests",
           "[server][dispatcher][protocol]") {
-    const RequestHandler handler;
+    const RequestHandler handler(kTestTokens, {});
     RunningServer fixture;
     fixture.use_workers([&](ConnectionId, const Request& request) {
-        return handler.handle(request);
+        return handler.handle(request).response;
     }, 1);
     fixture.start();
     auto client = connect_client(fixture.server.port());
@@ -940,7 +950,7 @@ TEST_CASE("Oversized worker responses do not interrupt request processing", "[se
         throw_error = true;
     }
 
-    const RequestHandler handler;
+    const RequestHandler handler(kTestTokens, {});
     RunningServer fixture;
     fixture.use_workers([&](ConnectionId, const Request& request) {
         if (request.action == "large") {
@@ -948,7 +958,7 @@ TEST_CASE("Oversized worker responses do not interrupt request processing", "[se
             if (error_response) return make_error_response(request, "test_error", text);
             return make_response(request, {{"text", text}});
         }
-        return handler.handle(request);
+        return handler.handle(request).response;
     });
     fixture.start();
     auto first = connect_client(fixture.server.port());
@@ -1023,7 +1033,7 @@ TEST_CASE("Response serialization failures do not stall later requests", "[serve
     SECTION("Invalid UTF-8 in a returned response") {}
     SECTION("Invalid UTF-8 in a ProtocolError message") { throw_error = true; }
 
-    const RequestHandler handler;
+    const RequestHandler handler(kTestTokens, {});
     RunningServer fixture;
     fixture.use_workers([&](ConnectionId, const Request& request) {
         if (request.action == "fail") {
@@ -1031,7 +1041,7 @@ TEST_CASE("Response serialization failures do not stall later requests", "[serve
             if (throw_error) throw ProtocolError("test_error", text, request);
             return make_response(request, {{"text", text}});
         }
-        return handler.handle(request);
+        return handler.handle(request).response;
     }, 1, 1, 1);
     fixture.start();
     auto client = connect_client(fixture.server.port());
@@ -1078,4 +1088,124 @@ TEST_CASE("Stopping the Reactor before workers finish is safe", "[server][dispat
     fixture.check();
     CHECK(finished == 1);
     CHECK_FALSE(completion_ran);
+}
+
+TEST_CASE("Authentication is applied before pipelined requests take their session snapshot",
+          "[server][dispatcher][session]") {
+    RunningServer fixture;
+    fixture.use_session_workers([](ConnectionId, const Request& request, std::optional<Session> session) {
+        if (request.action == "authenticate") {
+            return RequestResult{make_response(request),
+                Session{7, std::chrono::system_clock::now() + 1h}};
+        }
+        if (request.action == "failed_auth") {
+            return RequestResult{make_error_response(request, "invalid_token", "Invalid token")};
+        }
+        return RequestResult{make_response(request, {{"user_id", session ? session->user_id : 0}})};
+    });
+    fixture.start();
+    auto client = connect_client(fixture.server.port());
+    std::string bytes;
+    for (const auto* action : {"probe", "authenticate", "probe", "failed_auth", "probe"}) {
+        bytes += encode_frame(nlohmann::json{{"type", "request"}, {"request_id", action}, {"action", action}}.dump());
+    }
+    send_all(client.get(), bytes);
+    CHECK(nlohmann::json::parse(receive_frame(client.get()))["data"]["user_id"] == 0);
+    CHECK(nlohmann::json::parse(receive_frame(client.get()))["ok"] == true);
+    CHECK(nlohmann::json::parse(receive_frame(client.get()))["data"]["user_id"] == 7);
+    CHECK(nlohmann::json::parse(receive_frame(client.get()))["error"]["code"] == "invalid_token");
+    CHECK(nlohmann::json::parse(receive_frame(client.get()))["data"]["user_id"] == 7);
+    fixture.check();
+}
+
+TEST_CASE("A new authenticated connection replaces the old connection without losing its binding",
+          "[server][dispatcher][session]") {
+    RunningServer fixture;
+    fixture.use_session_workers([](ConnectionId, const Request& request, std::optional<Session>) {
+        return RequestResult{make_response(request), Session{7, std::chrono::system_clock::now() + 1h}};
+    });
+    fixture.start();
+    const auto authenticate = encode_frame(R"({"type":"request","request_id":"a","action":"authenticate"})");
+    auto old = connect_client(fixture.server.port());
+    send_all(old.get(), authenticate);
+    REQUIRE(nlohmann::json::parse(receive_frame(old.get()))["ok"] == true);
+    auto current = connect_client(fixture.server.port());
+    send_all(current.get(), authenticate);
+    REQUIRE(nlohmann::json::parse(receive_frame(current.get()))["ok"] == true);
+    expect_closed(old.get());
+    // Refreshing the same connection must not close itself.
+    send_all(current.get(), authenticate);
+    CHECK(nlohmann::json::parse(receive_frame(current.get()))["ok"] == true);
+    std::promise<bool> bound;
+    auto ready = bound.get_future();
+    fixture.server.post([&] { bound.set_value(fixture.dispatcher->sessions().connection_for(7).has_value()); });
+    REQUIRE(ready.wait_for(2s) == std::future_status::ready);
+    CHECK(ready.get());
+    fixture.check();
+}
+
+TEST_CASE("A disconnected authentication task cannot replace an online session",
+          "[server][dispatcher][session]") {
+    std::promise<ConnectionId> started;
+    auto active = started.get_future();
+    std::promise<void> disconnected;
+    auto closed = disconnected.get_future();
+    std::atomic<ConnectionId> delayed_id{0};
+    RunningServer fixture;
+    TaskGate gate;
+    fixture.use_session_workers([&, wait = gate.future](ConnectionId id, const Request& request,
+                                                       std::optional<Session> session) {
+        if (request.request_id == "delayed") {
+            delayed_id = id;
+            started.set_value(id);
+            wait.wait();
+        }
+        if (request.action == "authenticate") {
+            return RequestResult{make_response(request), Session{7, std::chrono::system_clock::now() + 1h}};
+        }
+        return RequestResult{make_response(request, {{"user_id", session ? session->user_id : 0}})};
+    }, 1);
+    fixture.server.set_disconnect_handler([&](ConnectionId id) {
+        fixture.dispatcher->disconnect(id);
+        if (id == delayed_id) disconnected.set_value();
+    });
+    fixture.start();
+    auto current = connect_client(fixture.server.port());
+    send_all(current.get(), encode_frame(R"({"type":"request","request_id":"current","action":"authenticate"})"));
+    REQUIRE(nlohmann::json::parse(receive_frame(current.get()))["ok"] == true);
+    auto delayed = connect_client(fixture.server.port());
+    send_all(delayed.get(), encode_frame(R"({"type":"request","request_id":"delayed","action":"authenticate"})"));
+    REQUIRE(active.wait_for(2s) == std::future_status::ready);
+    const linger reset{1, 0};
+    REQUIRE(::setsockopt(delayed.get(), SOL_SOCKET, SO_LINGER, &reset, sizeof(reset)) == 0);
+    delayed.reset();
+    REQUIRE(closed.wait_for(2s) == std::future_status::ready);
+    gate.release();
+    send_all(current.get(), encode_frame(R"({"type":"request","request_id":"probe","action":"probe"})"));
+    CHECK(nlohmann::json::parse(receive_frame(current.get()))["data"]["user_id"] == 7);
+    fixture.check();
+}
+
+TEST_CASE("Expired or oversized authentication results cannot establish sessions",
+          "[server][dispatcher][session]") {
+    bool oversized = false;
+    SECTION("Token expires before the Reactor applies the result") {}
+    SECTION("Response serialization rejects the authentication result") { oversized = true; }
+    RunningServer fixture;
+    fixture.use_session_workers([oversized](ConnectionId, const Request& request, std::optional<Session> session) {
+        if (request.action == "authenticate") {
+            return RequestResult{make_response(request, {{"text", std::string(oversized ? kMaxFrameSize : 0, 'x')}}),
+                Session{7, std::chrono::system_clock::now() + (oversized ? 1h : -1h)}};
+        }
+        return RequestResult{make_response(request, {{"authenticated", session.has_value()}})};
+    });
+    fixture.start();
+    auto client = connect_client(fixture.server.port());
+    send_all(client.get(), encode_frame(R"({"type":"request","request_id":"a","action":"authenticate"})") +
+                          encode_frame(R"({"type":"request","request_id":"p","action":"probe"})"));
+    const auto error = nlohmann::json::parse(receive_frame(client.get()));
+    CHECK(error["request_id"] == "a");
+    CHECK(error["error"]["code"] == (oversized ? "response_too_large" : "invalid_token"));
+    CHECK(nlohmann::json::parse(receive_frame(client.get()))["data"]["authenticated"] == false);
+    fixture.check();
 }

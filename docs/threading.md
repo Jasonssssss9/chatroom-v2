@@ -16,7 +16,8 @@ See [HTTP Authentication](authentication.md) for HTTP limits and lifetimes.
 | `TcpServer` | Socket I/O, connection ownership, and callbacks posted to the Reactor |
 | `ThreadPool` | A FIFO task queue, fixed workers, and shutdown that joins them |
 | `RequestDispatcher` | Per-connection sequencing and handing results back to the Reactor |
-| `RequestHandler` | Operations on validated requests, currently `ping` |
+| `SessionManager` | Reactor-owned user bindings and online routing |
+| `RequestHandler` | `ping`, JWT authentication, and the session requirement for other actions |
 
 The pool knows nothing about connections, JSON, or chat operations. Its workers
 wait on a condition variable when the task queue is empty. They release the queue
@@ -29,6 +30,7 @@ The number of threads does not grow with the number of clients.
 Reactor: receive bytes and extract complete frames
     -> append the payload to that connection's request queue
     -> submit its first request to the worker pool
+       with a copy of the connection's current session
 
 Worker: parse the request envelope
     -> execute the handler
@@ -36,6 +38,7 @@ Worker: parse the request envelope
     -> post a completion through TcpServer::post()
 
 Reactor: wake through eventfd and apply the completion
+    -> apply successful authentication, replacing any previous online connection
     -> queue the response for socket output
     -> submit the next request for that connection
 ```
@@ -104,8 +107,9 @@ For example, if one connection sends A followed by B:
 3. The Reactor applies A's result and queues its response.
 4. Only then is B submitted.
 
-This orders both execution and responses on one connection. It also leaves a clear
-place to apply future authentication state before starting the next request.
+This orders both execution and responses on one connection. Authentication binds
+the session before the next task receives its snapshot, so pipelining
+`authenticate` followed by a business request preserves the expected identity.
 Requests from different connections have no global execution or completion order.
 
 ## Data Ownership
@@ -115,22 +119,24 @@ It parses that payload into its own `Request`. It never holds a `TcpConnection&`
 socket pointer, or reference to the dispatcher's per-connection queue.
 
 The handler receives the connection ID and a const reference to that task's local
-request. It may be invoked concurrently for different connections, so shared
-service dependencies must support concurrent calls. The current `RequestHandler`
-is stateless. The database layer provides a caller-owned `Database` and `ChatStore`.
-Future handlers will use a connection owned by their worker rather than sharing
-one raw connection across workers. See [MySQL Persistence](database.md).
+request, together with an optional session copy. It may be invoked concurrently
+for different connections, so shared service dependencies must support concurrent
+calls. `RequestHandler` holds immutable configuration and a shared token service;
+its database connection is private to each worker. It returns a `RequestResult`
+containing JSON and an optional authenticated identity. Serialization failures
+and oversized responses discard that identity. The Reactor checks expiry again
+before binding it. See [MySQL Persistence](database.md).
 
-Only Reactor callbacks modify the dispatcher's request map and network state.
+Only Reactor callbacks modify the request map, session maps, and network state.
 Completions look up the ID again. They do not reuse a connection reference captured
 when the request arrived.
 
 ## Disconnects and EOF
 
-A disconnect callback erases that connection's application queue. Waiting requests
+A disconnect callback removes the session and that connection's application queue. Waiting requests
 are discarded and release their global slots. A task already submitted to the pool
 may still finish. Its completion releases its slot, finds no connection queue, and
-discards the response. This does not cancel or roll back work already performed by
+discards the response and any authentication result. This does not cancel or roll back work already performed by
 a handler.
 
 A TCP FIN closes only the peer's sending direction. Clients using piped input still

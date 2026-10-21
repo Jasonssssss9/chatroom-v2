@@ -19,7 +19,7 @@ include(Catch)
 catch_discover_tests(chatroom_tests PROPERTIES TIMEOUT 15)
 
 if(BUILD_DATABASE_TESTS)
-    add_executable(chatroom_database_tests database_test.cpp auth_http_test.cpp)
+    add_executable(chatroom_database_tests database_test.cpp auth_http_test.cpp tcp_auth_test.cpp)
     target_link_libraries(chatroom_database_tests PRIVATE
         chatroom_http chatroom_app Catch2::Catch2WithMain)
     target_compile_options(chatroom_database_tests PRIVATE -Wall -Wextra -Wpedantic)

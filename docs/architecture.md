@@ -38,7 +38,7 @@ discard duplicates using message IDs. Unacknowledged messages can be delivered a
 The server network layer implements non-blocking IPv4 TCP, an epoll ET Reactor,
 message framing, buffered writes, and cross-thread sends through an eventfd-backed
 queue. A configurable pool (four workers by default) parses and handles requests,
-with per-connection ordering and completions returned to the Reactor. The executable implements `ping` and
+with per-connection ordering and completions returned to the Reactor. The executable implements `ping`, `authenticate`, and
 correlated protocol errors. Catch2 covers framing, request validation, handlers,
 connection I/O, and TCP integration. The command-line client uses a blocking TCP
 connection with separate input and receive threads. Its library and tests can be
@@ -65,4 +65,9 @@ and jwt-cpp HS256 token issuance. HTTP uses a separate fixed worker pool; each
 worker reuses its own database connection. Both listeners run in the same process.
 See [HTTP Authentication](authentication.md).
 
-TCP token validation, online sessions, and network chat operations are still planned.
+TCP verifies JWT signatures and claims, checks that the user exists, and returns
+the identity to the Reactor. `SessionManager` keeps connection-to-user and
+user-to-connection maps on the Reactor thread. A new authenticated connection
+replaces the previous one; disconnect removes its binding. Workers receive
+session copies, and expired sessions cannot authorize business requests or online
+routing. Network chat operations are still planned.

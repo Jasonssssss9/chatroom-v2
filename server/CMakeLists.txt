@@ -51,10 +51,11 @@ add_library(chatroom_app
     src/config.cpp
     src/request_handler.cpp
     src/request_dispatcher.cpp
+    src/session_manager.cpp
     src/thread_pool.cpp
 )
 target_include_directories(chatroom_app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(chatroom_app PUBLIC chatroom_net)
+target_link_libraries(chatroom_app PUBLIC chatroom_net chatroom_auth)
 target_compile_options(chatroom_app PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(chatroom_server src/main.cpp)

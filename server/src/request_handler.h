@@ -1,15 +1,26 @@
 #pragma once
 
 #include "protocol.h"
+#include "auth/token_service.h"
+#include "config.h"
 
 namespace chatroom {
 
-// Dispatches application requests without accessing sockets or connection buffers.
-// Currently handles ping; business operations will be added with their services.
+struct RequestResult {
+    nlohmann::json response;
+    std::optional<Session> authenticated_session = std::nullopt;
+};
+
+// Worker-side application dispatch. Session changes are returned to the Reactor.
 class RequestHandler {
 public:
-    nlohmann::json handle(std::string_view payload) const;
-    nlohmann::json handle(const Request& request) const;
+    RequestHandler(const TokenService& tokens, DatabaseConfig database);
+    RequestResult handle(std::string_view payload, std::optional<Session> session = {}) const;
+    RequestResult handle(const Request& request, std::optional<Session> session = {}) const;
+
+private:
+    const TokenService& tokens_;
+    DatabaseConfig database_;
 };
 
 } // namespace chatroom
