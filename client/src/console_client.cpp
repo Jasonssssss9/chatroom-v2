@@ -20,16 +20,34 @@ const char* kHelp = "Commands:\n"
     "  /register <username> <password>  Create an account\n"
     "  /login <username> <password>     Log in and authenticate TCP\n"
     "  /send <id[,id...]> <text>        Send a message to user IDs\n"
+    "  /create_group <name> [id,...]    Create a group, including yourself\n"
+    "  /members <group-id>             List the group's members\n"
+    "  /send_group <group-id> <text>    Send a group message\n"
     "  /ping                           Check the TCP connection\n"
     "  /help                           Show these commands\n"
     "  /quit                           Disconnect\n"
-    "Quote usernames or passwords that contain spaces. JSON requests are also accepted.\n";
+    "Quote credentials or group names that contain spaces. JSON requests are also accepted.\n";
 
 bool valid_id(std::string_view text) {
     std::uint64_t id = 0;
     const auto parsed = std::from_chars(text.data(), text.data() + text.size(), id);
     return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() &&
            id != 0 && text.front() != '0';
+}
+
+nlohmann::json parse_ids(std::string_view text) {
+    auto ids = nlohmann::json::array();
+    if (text.empty()) return ids;
+    while (true) {
+        const auto comma = text.find(',');
+        const auto id = text.substr(0, comma);
+        if (!valid_id(id)) throw std::invalid_argument("Use positive user IDs separated by commas");
+        ids.push_back(std::string(id));
+        if (comma == std::string_view::npos) break;
+        text.remove_prefix(comma + 1);
+    }
+    if (ids.size() > 64) throw std::invalid_argument("At most 64 user IDs are allowed");
+    return ids;
 }
 
 std::string random_prefix() {
@@ -64,13 +82,34 @@ std::string format_message(const nlohmann::json& message) {
     const auto data = message.find("data");
     if (data == message.end() || !data->is_object()) return "Server: " + message.dump();
     if (type == "notification" && action == "message") {
-        return "[message " + visible(field(*data, "message_id")) + "] user " +
+        const auto group = field(*data, "group_id");
+        const auto prefix = group.empty() ? "[message " : "[group " + visible(group) + ", message ";
+        return prefix + visible(field(*data, "message_id")) + "] user " +
                visible(field(*data, "sender_id")) + ": " + visible(field(*data, "text"));
+    }
+    if (type == "notification" && action == "group_created") {
+        return "Added to group " + visible(field(*data, "group_id")) + ": " +
+               visible(field(*data, "name")) + " (owner " + visible(field(*data, "owner_id")) + ").";
     }
     if (type == "response" && message.value("ok", nlohmann::json{}) == true) {
         if (action == "ack_message") return {};
         if (action == "authenticate") return "Authenticated as user " + visible(field(*data, "user_id")) + ".";
         if (action == "send_message") return "Sent message " + visible(field(*data, "message_id")) + ".";
+        if (action == "send_group_message") return "Sent message " + visible(field(*data, "message_id")) +
+            " to group " + visible(field(*data, "group_id")) + ".";
+        if (action == "create_group") return "Created group " + visible(field(*data, "group_id")) + ".";
+        if (action == "get_group_members") {
+            const auto members = data->find("members");
+            if (members != data->end() && members->is_array()) {
+                std::string text = "Group " + visible(field(*data, "group_id")) + " members: ";
+                for (std::size_t i = 0; i < members->size(); ++i) {
+                    if (!(*members)[i].is_string()) return "Server: " + message.dump();
+                    if (i != 0) text += ", ";
+                    text += visible((*members)[i].get<std::string>());
+                }
+                return text + ".";
+            }
+        }
         if (action == "ping") return "Pong.";
     }
     return "Server: " + message.dump();
@@ -133,7 +172,9 @@ bool ConsoleClient::send_line(std::string_view line) {
 
 void ConsoleClient::send_request(const std::string& action, nlohmann::json data) {
     const auto number = std::to_string(next_request_id_++);
-    if (action == "send_message") data["client_message_id"] = message_prefix_ + "-" + number;
+    if (action == "send_message" || action == "send_group_message") {
+        data["client_message_id"] = message_prefix_ + "-" + number;
+    }
     const auto payload = nlohmann::json{{"type", "request"}, {"request_id", "cli-" + number},
                                        {"action", action}, {"data", std::move(data)}}.dump();
     std::lock_guard<std::mutex> lock(send_mutex_);
@@ -167,24 +208,34 @@ bool ConsoleClient::handle_command(std::string_view line) {
             return true;
         }
         send_request("authenticate", {{"token", token}});
-    } else if (command == "/send") {
-        std::string recipients, text;
-        input >> recipients;
-        std::getline(input >> std::ws, text);
-        if (recipients.empty() || text.empty()) throw std::invalid_argument("Usage: /send <id[,id...]> <text>");
-        if (text.size() > 4096) throw std::invalid_argument("Message text must contain 1 to 4096 bytes");
-        auto ids = nlohmann::json::array();
-        std::string_view remaining(recipients);
-        while (true) {
-            const auto comma = remaining.find(',');
-            const auto id = remaining.substr(0, comma);
-            if (!valid_id(id)) throw std::invalid_argument("Recipients must be positive user IDs separated by commas");
-            ids.push_back(std::string(id));
-            if (comma == std::string_view::npos) break;
-            remaining.remove_prefix(comma + 1);
+    } else if (command == "/create_group") {
+        std::string name, members;
+        if (!(input >> std::quoted(name))) throw std::invalid_argument("Usage: /create_group <name> [id,...]");
+        input >> members;
+        if (input >> extra) throw std::invalid_argument("Quote group names containing spaces");
+        if (name.empty() || name.size() > 128) throw std::invalid_argument("Group name must contain 1 to 128 bytes");
+        send_request("create_group", {{"name", name}, {"members", parse_ids(members)}});
+    } else if (command == "/members") {
+        std::string group;
+        if (!(input >> group) || !valid_id(group) || (input >> extra)) {
+            throw std::invalid_argument("Usage: /members <group-id>");
         }
-        if (ids.size() > 64) throw std::invalid_argument("A message accepts at most 64 recipient IDs");
-        send_request("send_message", {{"recipients", std::move(ids)}, {"text", text}});
+        send_request("get_group_members", {{"group_id", group}});
+    } else if (command == "/send" || command == "/send_group") {
+        std::string target, text;
+        input >> target;
+        std::getline(input >> std::ws, text);
+        if (target.empty() || text.empty()) {
+            throw std::invalid_argument("Usage: " + command + " " +
+                (command == "/send" ? "<id[,id...]> <text>" : "<group-id> <text>"));
+        }
+        if (text.size() > 4096) throw std::invalid_argument("Message text must contain 1 to 4096 bytes");
+        if (command == "/send_group") {
+            if (!valid_id(target)) throw std::invalid_argument("Group ID must be a positive ID string");
+            send_request("send_group_message", {{"group_id", target}, {"text", text}});
+        } else {
+            send_request("send_message", {{"recipients", parse_ids(target)}, {"text", text}});
+        }
     } else {
         throw std::invalid_argument("Unknown command. Use /help to list commands");
     }

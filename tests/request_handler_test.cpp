@@ -25,7 +25,7 @@ TEST_CASE("Unsupported actions return an error without claiming business support
           "[protocol][handler]") {
     const RequestHandler handler(kTestTokens, {});
     const Session session{42, std::chrono::system_clock::now() + std::chrono::hours(1)};
-    for (const auto* action : {"auth", "create_group", "unknown"}) {
+    for (const auto* action : {"auth", "future_action", "unknown"}) {
         const json request{{"type", "request"}, {"request_id", "r1"}, {"action", action}};
         const auto response = handler.handle(request.dump(), session).response;
         CHECK(response["request_id"] == "r1");
@@ -158,5 +158,50 @@ TEST_CASE("Message acknowledgments validate identity and IDs before accessing My
         CHECK(result.response["request_id"] == "a1");
         CHECK(result.response["error"]["code"] == "invalid_request");
         CHECK_FALSE(result.acknowledged_message);
+    }
+}
+
+TEST_CASE("Group actions require authentication and validate fields before MySQL", "[handler][group]") {
+    const RequestHandler handler(kTestTokens, {});
+    const Session session{7, std::chrono::system_clock::now() + std::chrono::hours(1)};
+    for (const auto* action : {"create_group", "get_group_members", "send_group_message"}) {
+        CHECK(handler.handle(Request{"g1", action}).response["error"]["code"] == "authentication_required");
+    }
+    std::vector<Request> invalid;
+    for (const auto& name : {json(nullptr), json(""), json(42), json(std::string(129, 'x'))}) {
+        invalid.push_back({"g1", "create_group", {{"name", name}}});
+    }
+    invalid.push_back({"g1", "create_group"});
+    for (const auto& members : {json(nullptr), json("8"), json::object(), json::array({8}),
+                                json::array({"0"}), json::array({"08"}), json::array({"-8"}),
+                                json::array({"18446744073709551616"}),
+                                json(std::vector<std::string>(65, "8"))}) {
+        invalid.push_back({"g1", "create_group", {{"name", "Study"}, {"members", members}}});
+    }
+    auto members = json::array();
+    for (int i = 100; i < 164; ++i) members.push_back(std::to_string(i));
+    invalid.push_back({"g1", "create_group", {{"name", "Study"}, {"members", members}}});
+    for (const auto& group : {json(nullptr), json(1), json(""), json("0"), json("01"),
+                              json("1x"), json("18446744073709551616")}) {
+        invalid.push_back({"g1", "get_group_members", {{"group_id", group}}});
+        invalid.push_back({"g1", "send_group_message",
+            {{"group_id", group}, {"client_message_id", "m1"}, {"text", "Hello"}}});
+    }
+    invalid.push_back({"g1", "get_group_members"});
+    for (const auto* name : {"client_message_id", "text", "group_id"}) {
+        auto data = json{{"group_id", "1"}, {"client_message_id", "m1"}, {"text", "Hello"}};
+        data.erase(name);
+        invalid.push_back({"g1", "send_group_message", data});
+    }
+    invalid.push_back({"g1", "send_group_message", {{"group_id", "1"},
+        {"client_message_id", std::string(65, 'x')}, {"text", "Hello"}}});
+    invalid.push_back({"g1", "send_group_message", {{"group_id", "1"},
+        {"client_message_id", "m1"}, {"text", std::string(4097, 'x')}}});
+    for (const auto& request : invalid) {
+        const auto result = handler.handle(request, session);
+        CHECK(result.response["request_id"] == "g1");
+        CHECK(result.response["action"] == request.action);
+        CHECK(result.response["error"]["code"] == "invalid_request");
+        CHECK_FALSE(result.notification);
     }
 }

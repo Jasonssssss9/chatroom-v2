@@ -166,8 +166,10 @@ Ctrl+C uses normal process termination.
 Commands use an `AuthClient` for HTTP registration and login. The input thread
 performs these blocking calls while the receiver continues processing messages.
 Login returns a JWT directly to a generated TCP `authenticate` request. The
-client does not display or persist the token. `/send` generates a fresh client
-message ID; `/ping`, `/help`, and `/quit` complete the small command set. Normal
+client does not display or persist the token. `/send` and `/send_group` generate
+fresh client message IDs. `/create_group` and `/members` manage group creation
+and member queries; `/ping`, `/help`, and `/quit` handle connection checks and
+local control. Normal
 output formats messages and errors; `--json` retains raw payload display.
 See [Command-Line Client](client.md) for syntax and examples.
 

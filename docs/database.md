@@ -110,8 +110,12 @@ before saving. Foreign keys remain the final consistency check.
 
 `create_group()` inserts the group and members atomically, always including the
 owner. Repeated member IDs are collapsed. `save_group_message()` requires the
-sender to be a member and locks a membership snapshot. Every other member gets a
-delivery. A group containing only its sender can persist a message without deliveries.
+sender to be a member and locks a membership snapshot. It returns `std::nullopt`
+when the sender is not a member; success returns the message ID and persisted
+recipient IDs, including on retries. Every other member gets a delivery. A group
+containing only its sender can persist a message without deliveries. The TCP
+handler bounds groups to 64 members and uses the returned delivery snapshot for
+broadcast. See [Group Chat](groups.md).
 
 Direct and group sends save the message and recipients in one transaction. A
 failed recipient insert rolls back the whole operation. Direct sends require at

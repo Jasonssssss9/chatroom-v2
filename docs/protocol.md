@@ -13,11 +13,13 @@ The server currently supports:
 - JWT authentication with `authenticate` and Reactor-owned user sessions.
 - Persisted private and multi-recipient messages with online notifications.
 - Consistent errors for malformed JSON, invalid requests, and unsupported actions.
-- Server-initiated `message` notifications.
+- Server-initiated `message` and `group_created` notifications.
 - Recipient acknowledgments and bounded replay after authentication.
+- Group creation, member queries, and persisted group broadcasts.
 
-The implemented actions are `ping`, `authenticate`, `send_message`, and `ack_message`.
-Groups and file transfers are not implemented yet.
+The implemented actions are `ping`, `authenticate`, `send_message`, `ack_message`,
+`create_group`, `get_group_members`, and `send_group_message`.
+File transfers are not implemented yet.
 They do not return success placeholders.
 
 ## 2. Framing
@@ -310,6 +312,51 @@ message. Different senders may use the same client ID independently.
 
 See [Messaging](messaging.md) for a two-client walkthrough.
 
+### create_group
+
+```json
+{"type":"request","request_id":"g1","action":"create_group","data":{"name":"Study group","members":["2","3"]}}
+```
+
+`name` contains 1 to 128 UTF-8 bytes. `members` is an optional array of 0 to 64
+user ID strings before deduplication. The creator is always included; there may
+be at most 64 distinct members in total. All members must exist. Success returns
+`{"group_id":"42"}` in response data after the group and memberships commit.
+Other online members receive a `group_created` notification containing `group_id`,
+`owner_id`, `name`, and sorted member IDs. This live notice has no message ACK.
+An empty member list creates an owner-only group. Duplicate names are allowed;
+group IDs identify groups. A missing member receives `invalid_recipient`.
+
+### get_group_members
+
+```json
+{"type":"request","request_id":"g2","action":"get_group_members","data":{"group_id":"42"}}
+```
+
+Only current members can query the list. Success returns
+`{"group_id":"42","members":["1","2","3"]}` in response data, with sorted
+user IDs. A missing group and a non-member both receive `not_group_member`.
+
+### send_group_message
+
+```json
+{"type":"request","request_id":"g3","action":"send_group_message","data":{"client_message_id":"alice-group-1","group_id":"42","text":"Hello everyone"}}
+```
+
+The client message ID and text use the same byte limits as `send_message`.
+`group_id` uses the same canonical unsigned 64-bit string format as user IDs.
+The database checks membership and saves the message and recipient snapshot in
+one transaction. The sender gets `{"message_id":"105","group_id":"42"}` in
+response data. Every other member has a delivery. Group notifications use the
+existing `message` action and add `group_id` to their data; ACK and offline replay
+work exactly as for private messages.
+
+Retries reuse the persisted recipient snapshot, even if membership changes.
+Client message IDs are unique per sender across private and group messages.
+Changed text, group, or message kind receives `message_conflict`; a sender who
+is not a current member receives `not_group_member`. Supplied ownership or
+recipient fields are ignored. See [Group Chat](groups.md) for detailed behavior.
+
 ### ack_message
 
 After accepting a `message` notification, acknowledge its persisted ID:
@@ -358,8 +405,9 @@ connection; pending deliveries remain in MySQL for reconnect.
 | `already_authenticated` | A bound connection attempts to change users | Kept open |
 | `authentication_required` | Action requires an unexpired session | Kept open |
 | `invalid_recipient` | At least one recipient does not exist | Kept open |
-| `message_conflict` | A sender reuses a client message ID with different text or recipients | Kept open |
+| `message_conflict` | A sender reuses a client message ID with different text, recipients, group, or message kind | Kept open |
 | `invalid_message` | No delivery with this message ID belongs to the authenticated user | Kept open |
+| `not_group_member` | The group is missing or the authenticated user is not a member | Kept open |
 | `unknown_action` | Authenticated request with an unsupported action | Kept open |
 | `internal_error` | Unexpected application-handler or response serialization failure | Kept open |
 | `response_too_large` | Serialized response or notification exceeds 65,536 bytes | Kept open |
@@ -399,7 +447,8 @@ features while assigning readable operation names and the appropriate transport.
 
 HTTP registration, login, TCP authentication, and direct or multi-recipient sends
 are implemented. See [Authentication](authentication.md) and [Messaging](messaging.md).
-Logout, groups, and file transfers remain planned.
+Group creation, member queries, and group messages are also implemented.
+Logout and file transfers remain planned. See [Group Chat](groups.md).
 
 | v1 operation | v2 operation | Transport |
 | --- | --- | --- |
@@ -419,8 +468,9 @@ The action data is intentionally small:
 | --- | --- |
 | `authenticate` (implemented) | `token` |
 | `send_message` (implemented) | `client_message_id`, `recipients` (array of user ID strings), `text` |
-| `create_group` | `name`, `members` (array of user ID strings) |
-| `send_group_message` | `client_message_id`, `group_id`, `text` |
+| `create_group` (implemented) | `name`, optional `members` (array of user ID strings) |
+| `get_group_members` (implemented) | `group_id` |
+| `send_group_message` (implemented) | `client_message_id`, `group_id`, `text` |
 | `ack_message` (implemented) | `message_id` |
 | `logout` | Empty object |
 

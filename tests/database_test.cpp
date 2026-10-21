@@ -143,17 +143,22 @@ TEST_CASE("Groups include their owner and persist one delivery per other member"
     const auto outsider = fixture.store.create_user("outsider", "test-hash");
     const auto group = fixture.store.create_group(owner, "Study group", {member, member, owner});
     CHECK(fixture.store.group_members(group) == std::vector<std::uint64_t>{owner, member});
-    CHECK_THROWS_AS(fixture.store.save_group_message(outsider, "bad", group, "text"),
-                    std::invalid_argument);
-    const auto id = fixture.store.save_group_message(member, "g1", group, "group text");
+    CHECK_FALSE(fixture.store.save_group_message(outsider, "bad", group, "text"));
+    const auto saved = fixture.store.save_group_message(member, "g1", group, "group text");
+    REQUIRE(saved.has_value());
+    const auto id = saved->id;
+    CHECK(saved->recipients == std::vector<std::uint64_t>{owner});
     REQUIRE(fixture.store.pending_messages(owner).size() == 1);
     CHECK(fixture.store.pending_messages(owner)[0].group_id == group);
     CHECK(fixture.store.pending_messages(member).empty());
-    CHECK(fixture.store.save_group_message(member, "g1", group, "group text") == id);
+    CHECK(fixture.store.save_group_message(member, "g1", group, "group text")->id == id);
     // Retrying a send must not add recipients who joined after the original send.
     fixture.database.execute("INSERT INTO group_members (group_id, user_id) VALUES (?, ?)",
                               {group, outsider});
-    CHECK(fixture.store.save_group_message(member, "g1", group, "group text") == id);
+    const auto retry = fixture.store.save_group_message(member, "g1", group, "group text");
+    REQUIRE(retry.has_value());
+    CHECK(retry->id == id);
+    CHECK(retry->recipients == saved->recipients);
     CHECK(fixture.store.pending_messages(outsider).empty());
     CHECK_THROWS_AS(fixture.store.save_direct_message(member, "g1", "group text", {owner}),
                     std::invalid_argument);

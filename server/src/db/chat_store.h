@@ -19,6 +19,11 @@ struct Message {
     std::string created_at;
 };
 
+struct SavedGroupMessage {
+    std::uint64_t id;
+    std::vector<std::uint64_t> recipients;
+};
+
 struct FileInfo {
     std::uint64_t id;
     std::uint64_t owner_id;
@@ -50,8 +55,10 @@ public:
     std::uint64_t save_direct_message(std::uint64_t sender, const std::string& client_message_id,
                                       const std::string& text,
                                       const std::vector<std::uint64_t>& recipients);
-    std::uint64_t save_group_message(std::uint64_t sender, const std::string& client_message_id,
-                                     std::uint64_t group, const std::string& text);
+    // No value means the sender is not a member. Recipients are the original
+    // persisted delivery snapshot, including on exact retries.
+    std::optional<SavedGroupMessage> save_group_message(std::uint64_t sender,
+        const std::string& client_message_id, std::uint64_t group, const std::string& text);
     std::vector<Message> pending_messages(std::uint64_t recipient, std::uint64_t limit = 100);
     // Repeated acknowledgments succeed; users cannot acknowledge another user's delivery.
     bool acknowledge_message(std::uint64_t recipient, std::uint64_t message);

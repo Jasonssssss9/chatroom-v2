@@ -86,4 +86,7 @@ even if the sender disconnected after the task started. Exact sender retries
 reuse the stored ID and may notify recipients again. `ack_message` confirms only
 the session user's delivery. After binding a session, the Reactor schedules
 bounded replay on workers and waits for a batch's ACKs before fetching more.
-Group chat and file transfers remain planned. See [Messaging](messaging.md).
+Group creation, member queries, and group messages are implemented. Group sends
+check membership and retain their original recipient snapshot across retries.
+Group and private messages share ACKs, replay, and online routing. File transfers
+remain planned. See [Messaging](messaging.md) and [Group Chat](groups.md).

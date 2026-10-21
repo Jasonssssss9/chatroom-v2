@@ -24,6 +24,48 @@ std::optional<std::uint64_t> parse_id(const nlohmann::json& value) {
         id == 0 || text.front() == '0') return std::nullopt;
     return id;
 }
+
+const std::string& require_string(const Request& request, const char* name, std::size_t maximum) {
+    const auto value = request.data.find(name);
+    if (value == request.data.end() || !value->is_string() ||
+        value->get_ref<const std::string&>().empty() || value->get_ref<const std::string&>().size() > maximum) {
+        throw ProtocolError("invalid_request", std::string(name) + " must contain 1 to " +
+                            std::to_string(maximum) + " bytes", request);
+    }
+    return value->get_ref<const std::string&>();
+}
+
+std::uint64_t require_id(const Request& request, const char* name) {
+    const auto value = request.data.find(name);
+    const auto id = value == request.data.end() ? std::nullopt : parse_id(*value);
+    if (!id) throw ProtocolError("invalid_request", std::string(name) + " must be a positive ID string", request);
+    return *id;
+}
+
+std::vector<std::uint64_t> parse_ids(const Request& request, const char* name, bool optional = false) {
+    const auto values = request.data.find(name);
+    if (optional && values == request.data.end()) return {};
+    if (values == request.data.end() || !values->is_array() ||
+        (!optional && values->empty()) || values->size() > 64) {
+        throw ProtocolError("invalid_request", std::string(name) + " must contain " +
+                            (optional ? "0" : "1") + " to 64 user ID strings", request);
+    }
+    std::vector<std::uint64_t> ids;
+    for (const auto& value : *values) {
+        const auto id = parse_id(value);
+        if (!id) throw ProtocolError("invalid_request", std::string(name) + " must contain positive user ID strings", request);
+        ids.push_back(*id);
+    }
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    return ids;
+}
+
+nlohmann::json id_strings(const std::vector<std::uint64_t>& ids) {
+    auto values = nlohmann::json::array();
+    for (const auto id : ids) values.push_back(std::to_string(id));
+    return values;
+}
 } // namespace
 
 RequestHandler::RequestHandler(const TokenService& tokens, DatabaseConfig database)
@@ -46,9 +88,15 @@ RequestResult RequestHandler::handle(const Request& request, std::optional<Sessi
         if (!session || session->expired()) {
             return {make_error_response(request, "authentication_required", "Authenticate before using this action")};
         }
-        if (request.action == "send_message") return send_message(request, session->user_id);
+        if (request.action == "send_message" || request.action == "send_group_message") {
+            return send_message(request, session->user_id);
+        }
+        if (request.action == "create_group") return create_group(request, session->user_id);
+        if (request.action == "get_group_members") return group_members(request, session->user_id);
         if (request.action == "ack_message") return acknowledge_message(request, session->user_id);
         return {make_error_response(request, "unknown_action", "Action is not supported")};
+    } catch (const ProtocolError& error) {
+        return {make_error_response(error.request, error.code, error.what())};
     } catch (const DatabaseError&) {
         worker_database().reset();
         throw;
@@ -82,49 +130,69 @@ RequestResult RequestHandler::authenticate(const Request& request, std::optional
 }
 
 RequestResult RequestHandler::send_message(const Request& request, std::uint64_t sender) const {
-    const auto& data = request.data;
-    const auto client_id = data.find("client_message_id");
-    const auto text = data.find("text");
-    const auto targets = data.find("recipients");
-    if (client_id == data.end() || !client_id->is_string() ||
-        client_id->get_ref<const std::string&>().empty() || client_id->get_ref<const std::string&>().size() > 64) {
-        return {make_error_response(request, "invalid_request", "client_message_id must contain 1 to 64 bytes")};
-    }
+    const auto& client_id = require_string(request, "client_message_id", 64);
     // This text limit keeps notifications within the frame limit even after JSON escaping.
-    if (text == data.end() || !text->is_string() ||
-        text->get_ref<const std::string&>().empty() || text->get_ref<const std::string&>().size() > 4096) {
-        return {make_error_response(request, "invalid_request", "text must contain 1 to 4096 bytes")};
-    }
-    if (targets == data.end() || !targets->is_array() || targets->empty() || targets->size() > 64) {
-        return {make_error_response(request, "invalid_request", "recipients must contain 1 to 64 user ID strings")};
-    }
-    std::vector<std::uint64_t> recipients;
-    for (const auto& value : *targets) {
-        const auto id = parse_id(value);
-        if (!id) {
-            return {make_error_response(request, "invalid_request", "recipients must contain positive user ID strings")};
-        }
-        recipients.push_back(*id);
-    }
-    std::sort(recipients.begin(), recipients.end());
-    recipients.erase(std::unique(recipients.begin(), recipients.end()), recipients.end());
+    const auto& text = require_string(request, "text", 4096);
+    const std::optional<std::uint64_t> group = request.action == "send_group_message"
+        ? std::optional<std::uint64_t>(require_id(request, "group_id")) : std::nullopt;
+    auto recipients = group ? std::vector<std::uint64_t>{} : parse_ids(request, "recipients");
 
     ChatStore store(database());
-    if (store.existing_user_ids(recipients) != recipients) {
-        return {make_error_response(request, "invalid_recipient", "A recipient does not exist")};
-    }
     std::uint64_t message;
     try {
-        message = store.save_direct_message(sender, client_id->get_ref<const std::string&>(),
-                                             text->get_ref<const std::string&>(), recipients);
+        if (group) {
+            auto saved = store.save_group_message(sender, client_id, *group, text);
+            if (!saved) return {make_error_response(request, "not_group_member", "Group does not exist or you are not a member")};
+            message = saved->id;
+            recipients = std::move(saved->recipients);
+        } else {
+            if (store.existing_user_ids(recipients) != recipients) {
+                return {make_error_response(request, "invalid_recipient", "A recipient does not exist")};
+            }
+            message = store.save_direct_message(sender, client_id, text, recipients);
+        }
     } catch (const std::invalid_argument&) {
         return {make_error_response(request, "message_conflict", "Client message ID belongs to a different message")};
     }
-    const auto notification = make_notification("message",
-        {{"message_id", std::to_string(message)}, {"sender_id", std::to_string(sender)},
-         {"client_message_id", *client_id}, {"text", *text}});
-    return {make_response(request, {{"message_id", std::to_string(message)}}), std::nullopt,
+    nlohmann::json result{{"message_id", std::to_string(message)}};
+    nlohmann::json data{{"message_id", std::to_string(message)}, {"sender_id", std::to_string(sender)},
+                        {"client_message_id", client_id}, {"text", text}};
+    if (group) {
+        result["group_id"] = std::to_string(*group);
+        data["group_id"] = std::to_string(*group);
+    }
+    const auto notification = make_notification("message", std::move(data));
+    return {make_response(request, std::move(result)), std::nullopt,
             UserNotification{std::move(recipients), notification.dump()}};
+}
+
+RequestResult RequestHandler::create_group(const Request& request, std::uint64_t owner) const {
+    const auto& name = require_string(request, "name", 128);
+    auto members = parse_ids(request, "members", true);
+    members.push_back(owner);
+    std::sort(members.begin(), members.end());
+    members.erase(std::unique(members.begin(), members.end()), members.end());
+    if (members.size() > 64) return {make_error_response(request, "invalid_request", "A group accepts at most 64 members including its owner")};
+    ChatStore store(database());
+    if (store.existing_user_ids(members) != members) {
+        return {make_error_response(request, "invalid_recipient", "A member does not exist")};
+    }
+    const auto group = store.create_group(owner, name, members);
+    const auto notice = make_notification("group_created", {{"group_id", std::to_string(group)},
+        {"owner_id", std::to_string(owner)}, {"name", name}, {"members", id_strings(members)}});
+    members.erase(std::find(members.begin(), members.end(), owner));
+    return {make_response(request, {{"group_id", std::to_string(group)}}), std::nullopt,
+            UserNotification{std::move(members), notice.dump()}};
+}
+
+RequestResult RequestHandler::group_members(const Request& request, std::uint64_t user) const {
+    const auto group = require_id(request, "group_id");
+    ChatStore store(database());
+    const auto members = store.group_members(group);
+    if (!std::binary_search(members.begin(), members.end(), user)) {
+        return {make_error_response(request, "not_group_member", "Group does not exist or you are not a member")};
+    }
+    return {make_response(request, {{"group_id", std::to_string(group)}, {"members", id_strings(members)}})};
 }
 
 RequestResult RequestHandler::acknowledge_message(const Request& request, std::uint64_t recipient) const {

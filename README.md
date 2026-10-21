@@ -7,8 +7,8 @@ chat, HTTP and JWT for authentication, and MySQL for users, groups, and messages
 File storage is planned on disk, with metadata in MySQL.
 
 The server and client network layers are implemented. The server accepts JSON
-requests, supports `ping`, `authenticate`, `send_message`, and `ack_message`, and
-returns structured errors. The command-line client provides registration, login,
+requests for ping, authentication, private and group chat, member queries, and
+acknowledgments, and returns structured errors. The command-line client provides registration, login,
 and chat commands, with raw JSON available for debugging.
 Application requests run in order for each connection on a configurable worker
 pool (four threads by default). Their results return to the Reactor for socket output.
@@ -20,8 +20,8 @@ checks database connectivity at startup. HTTP registration, login, password hash
 and JWT issuance are implemented. TCP verifies JWTs and binds users to connections,
 with one online connection per user. Private messages and multi-recipient sends
 are persisted before online notifications. Clients acknowledge deliveries, and
-authentication triggers bounded replay of unacknowledged messages. Group chat
-and file transfers are still planned.
+authentication triggers bounded replay of unacknowledged messages. Groups support
+creation, member queries, and persisted broadcast. File transfers are still planned.
 
 ## Project Layout
 
@@ -54,6 +54,7 @@ TCP sessions, HTTP settings, and examples.
 See [Messaging](docs/messaging.md) to chat between two command-line clients and
 understand persistence, retries, and online delivery.
 See [Command-Line Client](docs/client.md) for commands and display options.
+See [Group Chat](docs/groups.md) for group commands, permissions, and delivery snapshots.
 
 ## Building
 
@@ -152,7 +153,8 @@ even after disconnect. See [Request Capacity](docs/threading.md#request-capacity
 
 Each request is a four-byte unsigned payload length in network byte order followed
 by UTF-8 JSON. A request must include `type`, `request_id`, and `action`; `data` is
-an optional object. The server supports `ping`, `authenticate`, `send_message`, and `ack_message`. Invalid requests receive
+an optional object. Authentication, private and group messages, membership queries,
+and acknowledgments use the same envelope. Invalid requests receive
 structured error responses. JSON nesting is limited to 64 levels, counting the
 root object as level 1; oversized frames close the connection. See the
 [protocol reference](docs/protocol.md) for the complete format. Plain text sent
@@ -182,6 +184,9 @@ needed: `chatroom_client 127.0.0.1 8081 8080`.
 /login alice example-password
 /send 2 Hello Bob
 /send 2,3 Hello everyone
+/create_group "Study group" 2,3
+/members 42
+/send_group 42 Hello group
 /ping
 /help
 ```

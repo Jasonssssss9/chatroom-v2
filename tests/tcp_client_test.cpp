@@ -377,12 +377,62 @@ TEST_CASE("Invalid console commands leave the connection usable", "[client][cons
     });
     ConsoleProcess console(peer.port(), 8080, false);
     console.write("/help\n/unknown\n/login alice\n/register \"unfinished\n/send 0 Hello\n/send 8, Hello\n/ping extra\n");
+    console.write("/create_group\n/create_group \"\"\n/create_group Study 0\n/members 0\n/members 1 extra\n/send_group 01 Hello\n/send_group 1\n");
     console.write("/send 8 " + std::string(4097, 'x') + "\n/ping\n");
     const auto& output = console.read_until("Disconnected.");
     CHECK(output.find("Commands:") != std::string::npos);
     CHECK(output.find("Unknown command") != std::string::npos);
     CHECK(output.find("Usage: /login") != std::string::npos);
     CHECK(output.find("Pong.") != std::string::npos);
+    console.check();
+    peer.check();
+}
+
+TEST_CASE("Console group commands and notifications reuse message ACKs", "[client][console][group]") {
+    TestPeer peer([](int fd) {
+        const auto create = parse_request(receive_payload(fd));
+        if (create.action != "create_group" || create.data["name"] != "Study group" ||
+            create.data["members"] != nlohmann::json::array({"8", "9"})) {
+            throw std::runtime_error("Incorrect group creation command");
+        }
+        send_bytes(fd, encode_frame(make_response(create, {{"group_id", "42"}}).dump()));
+        send_bytes(fd, encode_frame(make_notification("group_created", {{"group_id", "50"},
+            {"owner_id", "8"}, {"name", "Friends"}, {"members", {"7", "8"}}}).dump()));
+        const auto members = parse_request(receive_payload(fd));
+        if (members.action != "get_group_members" || members.data["group_id"] != "42") {
+            throw std::runtime_error("Incorrect group members command");
+        }
+        send_bytes(fd, encode_frame(make_response(members, {{"group_id", "42"}, {"members", {"7", "8", "9"}}}).dump()));
+        const auto message = parse_request(receive_payload(fd));
+        if (message.action != "send_group_message" || message.data["group_id"] != "42" ||
+            message.data["text"] != "Hello group" || message.data["client_message_id"].get<std::string>().empty() ||
+            message.data["client_message_id"].get<std::string>().size() > 64) {
+            throw std::runtime_error("Incorrect group send command");
+        }
+        send_bytes(fd, encode_frame(make_response(message, {{"message_id", "105"}, {"group_id", "42"}}).dump()));
+        const auto notice = make_notification("message", {{"group_id", "42"}, {"message_id", "106"},
+            {"sender_id", "8"}, {"client_message_id", "reply"}, {"text", "Group reply"}}).dump();
+        send_bytes(fd, encode_frame(notice) + encode_frame(notice));
+        for (int i = 0; i < 2; ++i) {
+            const auto ack = parse_request(receive_payload(fd));
+            if (ack.action != "ack_message" || ack.data["message_id"] != "106") {
+                throw std::runtime_error("Group messages were not acknowledged");
+            }
+            send_bytes(fd, encode_frame(make_response(ack).dump()));
+        }
+    });
+    ConsoleProcess console(peer.port(), 8080, false);
+    console.write("/create_group \"Study group\" 8,9\n");
+    console.read_until("Created group 42.");
+    console.write("/members 42\n");
+    console.read_until("Group 42 members: 7, 8, 9.");
+    console.write("/send_group 42 Hello group\n");
+    const auto& output = console.read_until("Disconnected.");
+    CHECK(output.find("Added to group 50: Friends (owner 8).") != std::string::npos);
+    CHECK(output.find("Sent message 105 to group 42.") != std::string::npos);
+    const auto first = output.find("[group 42, message 106] user 8: Group reply");
+    REQUIRE(first != std::string::npos);
+    CHECK(output.find("Group reply", first + std::string("[group 42, message 106] user 8: Group reply").size()) == std::string::npos);
     console.check();
     peer.check();
 }

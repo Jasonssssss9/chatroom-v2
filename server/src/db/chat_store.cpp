@@ -119,18 +119,21 @@ std::uint64_t ChatStore::save_direct_message(std::uint64_t sender,
     return id;
 }
 
-std::uint64_t ChatStore::save_group_message(std::uint64_t sender,
+std::optional<SavedGroupMessage> ChatStore::save_group_message(std::uint64_t sender,
                                            const std::string& client_message_id,
                                            std::uint64_t group, const std::string& text) {
     Transaction transaction(database_);
     auto members = read_ids(database_.query(
         "SELECT user_id FROM group_members WHERE group_id = ? ORDER BY user_id FOR SHARE", {group}));
     const auto sender_it = std::find(members.begin(), members.end(), sender);
-    if (sender_it == members.end()) throw std::invalid_argument("Sender is not a group member");
+    if (sender_it == members.end()) return std::nullopt;
     members.erase(sender_it);
     const auto id = insert_message(sender, client_message_id, group, text, members);
+    const auto recipients = read_ids(database_.query(
+        "SELECT recipient_id FROM message_deliveries WHERE message_id = ? "
+        "ORDER BY recipient_id FOR SHARE", {id}));
     transaction.commit();
-    return id;
+    return SavedGroupMessage{id, recipients};
 }
 
 std::vector<Message> ChatStore::pending_messages(std::uint64_t recipient, std::uint64_t limit) {

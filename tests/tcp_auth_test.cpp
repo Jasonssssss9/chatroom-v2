@@ -220,6 +220,10 @@ json message_data(const std::string& client_id, const std::vector<std::uint64_t>
     for (const auto id : recipients) ids.push_back(std::to_string(id));
     return {{"client_message_id", client_id}, {"recipients", std::move(ids)}, {"text", text}};
 }
+
+json group_message_data(const std::string& client_id, const json& group, const std::string& text) {
+    return {{"client_message_id", client_id}, {"group_id", group}, {"text", text}};
+}
 } // namespace
 
 TEST_CASE("Authenticated peers exchange persisted private messages", "[database][tcp][message]") {
@@ -480,5 +484,163 @@ TEST_CASE("Replay advances only after its batch is acknowledged and respects cou
     CHECK(fixture.store.pending_messages(recipient).empty());
     peer.send("ping");
     CHECK(peer.receive()["data"]["pong"] == true);
+    running.check();
+}
+
+TEST_CASE("Groups notify online members and share persisted messages with online and offline members",
+          "[database][tcp][group][message]") {
+    DatabaseFixture fixture;
+    const auto alice = fixture.store.create_user("alice", "unused-test-hash");
+    const auto bob = fixture.store.create_user("bob", "unused-test-hash");
+    const auto carol = fixture.store.create_user("carol", "unused-test-hash");
+    const auto outsider = fixture.store.create_user("outsider", "unused-test-hash");
+    RunningChat running;
+    Peer first(running.server.port()), second(running.server.port()), other(running.server.port());
+    authenticate(first, running, alice);
+    authenticate(second, running, bob);
+    authenticate(other, running, outsider);
+    first.send("create_group", {{"name", "Study group"}, {"owner_id", std::to_string(outsider)},
+        {"members", {std::to_string(carol), std::to_string(bob), std::to_string(alice), std::to_string(bob)}}});
+    const auto created = first.receive();
+    REQUIRE(created["ok"] == true);
+    const auto group = created["data"]["group_id"];
+    const auto notice = second.receive();
+    CHECK(notice["action"] == "group_created");
+    CHECK(notice["data"]["group_id"] == group);
+    CHECK(notice["data"]["owner_id"] == std::to_string(alice));
+    CHECK(notice["data"]["name"] == "Study group");
+    CHECK(notice["data"]["members"] == json::array({std::to_string(alice), std::to_string(bob), std::to_string(carol)}));
+    CHECK(fixture.count("chat_groups") == 1);
+    CHECK(fixture.count("group_members") == 3);
+    second.send("get_group_members", {{"group_id", group}});
+    const auto members = second.receive();
+    CHECK(members["data"]["members"] == notice["data"]["members"]);
+    other.send("get_group_members", {{"group_id", group}});
+    CHECK(other.receive()["error"]["code"] == "not_group_member");
+    other.send("send_group_message", group_message_data("bad", group, "Not a member"));
+    CHECK(other.receive()["error"]["code"] == "not_group_member");
+    first.send("get_group_members", {{"group_id", "18446744073709551615"}});
+    CHECK(first.receive()["error"]["code"] == "not_group_member");
+    CHECK(fixture.count("messages") == 0);
+
+    auto data = group_message_data("g1", group, u8"Hello group \U0001f642");
+    data["sender_id"] = std::to_string(outsider);
+    data["recipients"] = {std::to_string(outsider)};
+    first.send("send_group_message", data);
+    const auto sent = first.receive();
+    REQUIRE(sent["ok"] == true);
+    CHECK(sent["data"]["group_id"] == group);
+    const auto message = second.receive();
+    CHECK(message["data"] == json{{"group_id", group}, {"message_id", sent["data"]["message_id"]},
+        {"sender_id", std::to_string(alice)}, {"client_message_id", "g1"}, {"text", data["text"]}});
+    CHECK(fixture.count("message_deliveries") == 2);
+    CHECK(fixture.store.pending_messages(alice).empty());
+    REQUIRE(fixture.store.pending_messages(carol).size() == 1);
+    CHECK(std::to_string(*fixture.store.pending_messages(carol)[0].group_id) == group);
+    other.send("ping");
+    CHECK(other.receive()["data"]["pong"] == true);
+    first.send("ping");
+    CHECK(first.receive()["data"]["pong"] == true);
+    second.send("ack_message", {{"message_id", sent["data"]["message_id"]}});
+    CHECK(second.receive()["ok"] == true);
+    Peer reconnected(running.server.port());
+    authenticate(reconnected, running, carol, false);
+    CHECK(reconnected.receive() == message);
+    reconnected.send("ack_message", {{"message_id", sent["data"]["message_id"]}});
+    CHECK(reconnected.receive()["ok"] == true);
+    CHECK(fixture.store.pending_messages(carol).empty());
+
+    second.send("send_group_message", group_message_data("reply", group, "Hi Alice"));
+    CHECK(second.receive()["ok"] == true);
+    CHECK(first.receive()["data"]["sender_id"] == std::to_string(bob));
+    CHECK(reconnected.receive()["data"]["text"] == "Hi Alice");
+    running.check();
+}
+
+TEST_CASE("Group retries broadcast only the original delivery snapshot and reject changed messages",
+          "[database][tcp][group][message]") {
+    DatabaseFixture fixture;
+    const auto owner = fixture.store.create_user("owner", "unused-test-hash");
+    const auto member = fixture.store.create_user("member", "unused-test-hash");
+    const auto newcomer = fixture.store.create_user("newcomer", "unused-test-hash");
+    const auto group_id = fixture.store.create_group(owner, "Study", {member});
+    const auto group = std::to_string(group_id);
+    const auto another = std::to_string(fixture.store.create_group(owner, "Another", {member}));
+    RunningChat running;
+    Peer first(running.server.port()), second(running.server.port()), third(running.server.port());
+    authenticate(first, running, owner);
+    authenticate(second, running, member);
+    authenticate(third, running, newcomer);
+    first.send("send_group_message", group_message_data("same-id", group, "Original"));
+    const auto sent = first.receive();
+    REQUIRE(sent["ok"] == true);
+    const auto notice = second.receive();
+    second.send("ack_message", {{"message_id", sent["data"]["message_id"]}});
+    CHECK(second.receive()["ok"] == true);
+    fixture.database.execute("INSERT INTO group_members (group_id, user_id) VALUES (?, ?)", {group_id, newcomer});
+    fixture.database.execute("DELETE FROM group_members WHERE group_id = ? AND user_id = ?", {group_id, member});
+    first.send("send_group_message", group_message_data("same-id", group, "Original"));
+    CHECK(first.receive()["data"] == sent["data"]);
+    CHECK(second.receive() == notice);
+    third.send("ping");
+    CHECK(third.receive()["data"]["pong"] == true);
+    CHECK(fixture.store.pending_messages(newcomer).empty());
+    CHECK(fixture.store.pending_messages(member).empty());
+    CHECK(fixture.count("messages") == 1);
+    CHECK(fixture.count("message_deliveries") == 1);
+    for (const auto& changed : {group_message_data("same-id", group, "Changed"),
+                                 group_message_data("same-id", another, "Original")}) {
+        first.send("send_group_message", changed);
+        CHECK(first.receive()["error"]["code"] == "message_conflict");
+    }
+    first.send("send_message", message_data("same-id", {member}, "Original"));
+    CHECK(first.receive()["error"]["code"] == "message_conflict");
+    second.send("send_group_message", group_message_data("removed", group, "No longer a member"));
+    CHECK(second.receive()["error"]["code"] == "not_group_member");
+    CHECK(fixture.count("messages") == 1);
+    running.check();
+}
+
+TEST_CASE("Group creation rejects missing users and supports an owner-only group", "[database][tcp][group]") {
+    DatabaseFixture fixture;
+    const auto owner = fixture.store.create_user("owner", "unused-test-hash");
+    RunningChat running;
+    Peer peer(running.server.port());
+    authenticate(peer, running, owner);
+    peer.send("create_group", {{"name", "Missing member"}, {"members", {"18446744073709551615"}}});
+    CHECK(peer.receive()["error"]["code"] == "invalid_recipient");
+    CHECK(fixture.count("chat_groups") == 0);
+    CHECK(fixture.count("group_members") == 0);
+    peer.send("create_group", {{"name", "Solo"}});
+    const auto created = peer.receive();
+    REQUIRE(created["ok"] == true);
+    const auto group = created["data"]["group_id"];
+    peer.send("get_group_members", {{"group_id", group}});
+    CHECK(peer.receive()["data"]["members"] == json::array({std::to_string(owner)}));
+    peer.send("send_group_message", group_message_data(std::string(64, '\1'), group, std::string(4096, '\0')));
+    CHECK(peer.receive()["ok"] == true);
+    peer.send("ping");
+    CHECK(peer.receive()["data"]["pong"] == true);
+    CHECK(fixture.count("messages") == 1);
+    CHECK(fixture.count("message_deliveries") == 0);
+    running.check();
+}
+
+TEST_CASE("Group creation accepts 64 total members and a 128-byte name", "[database][tcp][group]") {
+    DatabaseFixture fixture;
+    const auto owner = fixture.store.create_user("owner", "unused-test-hash");
+    auto members = json::array({std::to_string(owner)});
+    for (int i = 0; i < 63; ++i) {
+        members.push_back(std::to_string(fixture.store.create_user("member-" + std::to_string(i), "unused-test-hash")));
+    }
+    RunningChat running;
+    Peer peer(running.server.port());
+    authenticate(peer, running, owner);
+    peer.send("create_group", {{"name", std::string(128, 'x')}, {"members", members}});
+    const auto created = peer.receive();
+    REQUIRE(created["ok"] == true);
+    peer.send("get_group_members", {{"group_id", created["data"]["group_id"]}});
+    CHECK(peer.receive()["data"]["members"] == members);
+    CHECK(fixture.count("group_members") == 64);
     running.check();
 }

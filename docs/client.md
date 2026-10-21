@@ -26,6 +26,9 @@ credentials or JWT signing secret.
 | `/register <username> <password>` | Create an account and display its user ID |
 | `/login <username> <password>` | Log in over HTTP and authenticate this TCP connection |
 | `/send <id[,id...]> <text>` | Send a private or multi-recipient message |
+| `/create_group <name> [id,...]` | Create a group containing yourself and selected users |
+| `/members <group-id>` | Query the members of a group you belong to |
+| `/send_group <group-id> <text>` | Send a message to every other member |
 | `/ping` | Check the TCP connection |
 | `/help` | List commands |
 | `/quit` | Disconnect and exit |
@@ -72,10 +75,25 @@ Inside quoted credentials, escape a quote as `\"` and a backslash as `\\`.
 Commands are read directly from stdin; the terminal echoes credentials as typed.
 Usernames contain 1 to 64 bytes and passwords 8 to 128 bytes, matching the API.
 
-Each `/send` generates a fresh `client_message_id` from a random per-process
+Each `/send` or `/send_group` generates a fresh `client_message_id` from a random per-process
 prefix and a sequence number. Restarting the client does not reuse a fixed
 counter as a message ID. The client does not automatically retry uncertain sends;
 raw JSON requests can reuse a known client message ID for an exact retry.
+
+For group chat:
+
+```text
+/create_group "Study group" 2,3
+/members 42
+/send_group 42 Hello everyone
+```
+
+Use the ID returned by creation. The creator is included automatically, and the
+group may contain at most 64 members in total. Quote a group name containing
+spaces; its limit is 128 UTF-8 bytes. Group messages use the same 4096-byte text
+limit and are displayed with both group and message IDs. Online members receive
+a group creation notice. See [Group Chat](groups.md) for a complete walkthrough,
+permission checks, and retry behavior.
 
 ## Messages, Errors, and Reconnection
 
