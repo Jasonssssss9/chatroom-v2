@@ -141,7 +141,11 @@ another thread is using. Join I/O threads before destroying the client. Create a
 new instance to reconnect. Connection establishment is blocking and uses the
 operating system's timeout; hostnames and automatic reconnect are not implemented.
 
-The console validates each input line as JSON, then sends it. A receive thread
+The console limits each input line to 64 KiB before JSON validation and sending.
+LF and an optional preceding CR do not count toward that limit. On overflow it
+reports one error immediately and discards the rest of that line, retaining only
+a bounded input buffer. The next line is processed normally; an oversized final
+line is also discarded at EOF. A receive thread
 prints replies and signals an eventfd when it finishes. The input thread polls
 standard input and that eventfd, so remote disconnects also wake terminal input.
 Output is serialized with a mutex. `/quit` cancels I/O immediately; standard-input

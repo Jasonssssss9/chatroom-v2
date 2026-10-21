@@ -1,6 +1,7 @@
 #include "net/tcp_client.h"
 
 #include <arpa/inet.h>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
 #include <cerrno>
@@ -9,8 +10,12 @@
 #include <exception>
 #include <functional>
 #include <future>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
 #include <stdexcept>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <system_error>
 #include <thread>
 #include <utility>
@@ -121,6 +126,81 @@ private:
     std::thread thread_;
     std::exception_ptr error_;
 };
+
+// Exercise the real console with piped input, without changing the test runner's stdin.
+class ConsoleProcess {
+public:
+    explicit ConsoleProcess(std::uint16_t port) {
+        auto input = pipe();
+        auto output = pipe();
+        const auto port_text = std::to_string(port);
+        pid_ = ::fork();
+        check_socket(pid_, "fork");
+        if (pid_ == 0) {
+            if (::dup2(input[0].get(), STDIN_FILENO) < 0 ||
+                ::dup2(output[1].get(), STDOUT_FILENO) < 0) ::_exit(127);
+            ::execl(CHATROOM_CLIENT_PATH, CHATROOM_CLIENT_PATH, "127.0.0.1", port_text.c_str(), nullptr);
+            ::_exit(127);
+        }
+        input_ = std::move(input[1]);
+        output_ = std::move(output[0]);
+    }
+
+    ~ConsoleProcess() {
+        if (pid_ > 0) {
+            ::kill(pid_, SIGKILL);
+            while (::waitpid(pid_, nullptr, 0) < 0 && errno == EINTR) {}
+        }
+    }
+
+    void write(std::string_view bytes) {
+        while (!bytes.empty()) {
+            const auto count = ::write(input_.get(), bytes.data(), bytes.size());
+            if (count < 0 && errno == EINTR) continue;
+            if (count <= 0) throw std::runtime_error("Cannot write console input");
+            bytes.remove_prefix(static_cast<std::size_t>(count));
+        }
+    }
+
+    void finish_input() { input_.reset(); }
+
+    const std::string& read_until(std::string_view marker) {
+        while (text_.find(marker) == std::string::npos) {
+            pollfd event{output_.get(), POLLIN, 0};
+            const auto ready = ::poll(&event, 1, 2000);
+            if (ready < 0 && errno == EINTR) continue;
+            if (ready <= 0) throw std::runtime_error("Timed out waiting for console output");
+            char buffer[4096];
+            const auto count = ::read(output_.get(), buffer, sizeof(buffer));
+            if (count < 0 && errno == EINTR) continue;
+            if (count <= 0) throw std::runtime_error("Console exited before the expected output");
+            text_.append(buffer, static_cast<std::size_t>(count));
+        }
+        return text_;
+    }
+
+    void check() {
+        int status;
+        pid_t result;
+        do { result = ::waitpid(pid_, &status, 0); } while (result < 0 && errno == EINTR);
+        check_socket(result, "waitpid");
+        pid_ = -1;
+        REQUIRE(WIFEXITED(status));
+        CHECK(WEXITSTATUS(status) == 0);
+    }
+
+private:
+    static std::array<UniqueFd, 2> pipe() {
+        int ends[2];
+        check_socket(::pipe2(ends, O_CLOEXEC), "pipe2");
+        return {UniqueFd(ends[0]), UniqueFd(ends[1])};
+    }
+
+    pid_t pid_ = -1;
+    UniqueFd input_;
+    UniqueFd output_;
+    std::string text_;
+};
 } // namespace
 
 TEST_CASE("The client sends frames and retains consecutive replies", "[client]") {
@@ -227,4 +307,64 @@ TEST_CASE("The client reports invalid addresses and refused connections", "[clie
     REQUIRE(::getsockname(socket.get(), reinterpret_cast<sockaddr*>(&address), &size) == 0);
     // The port stays reserved, but no listener is started.
     CHECK_THROWS_AS(TcpClient("127.0.0.1", ntohs(address.sin_port)), std::system_error);
+}
+
+TEST_CASE("Console rejects oversized input before newline and preserves the next request", "[client][console]") {
+    const std::string payload = R"({"type":"request","request_id":"next","action":"ping"})";
+    TestPeer peer([&](int fd) {
+        if (receive_payload(fd) != payload) throw std::runtime_error("Console sent discarded input");
+        char byte;
+        if (::recv(fd, &byte, 1, 0) != 0) throw std::runtime_error("Expected only the valid request");
+        send_bytes(fd, encode_frame(payload));
+    });
+    ConsoleProcess console(peer.port());
+    const std::string warning = "Message exceeds the 64 KiB limit.";
+    console.write(std::string(kMaxFrameSize + 1, 'x'));
+    console.read_until(warning);
+    // All of this still belongs to the discarded line, including the apparent quit command.
+    console.write(std::string(kMaxFrameSize * 2, 'x') + "/quit\n" + payload + "\n");
+    console.finish_input();
+    const auto output = console.read_until("Disconnected.");
+    CHECK(output.find(warning, output.find(warning) + warning.size()) == std::string::npos);
+    CHECK(output.find("< " + payload) != std::string::npos);
+    console.check();
+    peer.check();
+}
+
+TEST_CASE("Console discards an oversized final line at EOF", "[client][console]") {
+    TestPeer peer([](int fd) {
+        char byte;
+        if (::recv(fd, &byte, 1, 0) != 0) throw std::runtime_error("Oversized input reached the peer");
+    });
+    ConsoleProcess console(peer.port());
+    const std::string warning = "Message exceeds the 64 KiB limit.";
+    console.write(std::string(kMaxFrameSize * 2, 'x'));
+    console.read_until(warning);
+    console.finish_input();
+    const auto output = console.read_until("Disconnected.");
+    CHECK(output.find(warning, output.find(warning) + warning.size()) == std::string::npos);
+    console.check();
+    peer.check();
+}
+
+TEST_CASE("Console accepts exactly 64 KiB with LF, CRLF, or EOF", "[client][console]") {
+    std::string ending;
+    SECTION("LF") { ending = "\n"; }
+    SECTION("CRLF") { ending = "\r\n"; }
+    SECTION("EOF") {}
+    const std::string payload = "\"" + std::string(kMaxFrameSize - 2, 'x') + "\"";
+    TestPeer peer([&](int fd) {
+        if (receive_payload(fd) != payload) throw std::runtime_error("Maximum-length payload changed");
+        char byte;
+        if (::recv(fd, &byte, 1, 0) != 0) throw std::runtime_error("Expected EOF after one frame");
+        send_bytes(fd, encode_frame(payload));
+    });
+    ConsoleProcess console(peer.port());
+    console.write(payload + ending);
+    console.finish_input();
+    const auto output = console.read_until("Disconnected.");
+    CHECK(output.find("64 KiB limit") == std::string::npos);
+    CHECK(output.find("< " + payload) != std::string::npos);
+    console.check();
+    peer.check();
 }

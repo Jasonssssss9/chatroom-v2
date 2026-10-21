@@ -33,9 +33,7 @@ bool ConsoleClient::send_line(std::string_view line) {
     if (line.empty()) {
         return true;
     }
-    if (line.size() > kMaxFrameSize) {
-        print("Message exceeds the 64 KiB limit.\n> ");
-    } else if (!nlohmann::json::accept(line.begin(), line.end())) {
+    if (!nlohmann::json::accept(line.begin(), line.end())) {
         print("Invalid JSON. Enter a JSON request or /quit.\n> ");
     } else {
         client_.send(line);
@@ -48,6 +46,7 @@ ConsoleClient::InputResult ConsoleClient::read_input() {
     // The receiver wakes poll on disconnect, even while the user has not entered a line.
     pollfd events[] = {{STDIN_FILENO, POLLIN, 0}, {receiver_done_.get(), POLLIN, 0}};
     std::string input;
+    bool discarding_line = false;
     char buffer[4096];
     while (true) {
         if (::poll(events, 2, -1) < 0) {
@@ -74,15 +73,25 @@ ConsoleClient::InputResult ConsoleClient::read_input() {
             throw std::system_error(errno, std::generic_category(), "read(stdin)");
         }
         if (count == 0) {
+            if (discarding_line) return InputResult::eof;
             return send_line(input) ? InputResult::eof : InputResult::quit;
         }
-        input.append(buffer, static_cast<std::size_t>(count));
-        std::size_t newline;
-        while ((newline = input.find('\n')) != std::string::npos) {
-            if (!send_line(std::string_view(input).substr(0, newline))) {
-                return InputResult::quit;
+        for (const char character : std::string_view(buffer, static_cast<std::size_t>(count))) {
+            if (character == '\n') {
+                if (!discarding_line && !send_line(input)) return InputResult::quit;
+                input.clear();
+                discarding_line = false;
+            } else if (!discarding_line) {
+                // Allow one trailing CR beyond the payload limit for CRLF input.
+                if (input.size() < kMaxFrameSize ||
+                    (input.size() == kMaxFrameSize && character == '\r')) {
+                    input += character;
+                } else {
+                    input.clear();
+                    discarding_line = true;
+                    print("Message exceeds the 64 KiB limit.\n> ");
+                }
             }
-            input.erase(0, newline + 1);
         }
     }
 }

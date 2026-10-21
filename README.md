@@ -177,6 +177,9 @@ Enter one complete JSON request per line:
 
 Replies appear with a `<` prefix and include the matching request ID. Invalid JSON
 syntax is rejected locally; envelope and action validation happen on the server.
+Input is limited to 64 KiB per line, excluding LF or CRLF. An oversized line is
+reported as soon as it exceeds the limit and discarded through its next newline;
+later lines can still be sent.
 
 After obtaining a JWT from HTTP login, bind this TCP connection to the user:
 

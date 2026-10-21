@@ -13,6 +13,8 @@ endif()
 if(BUILD_CLIENT)
     target_sources(chatroom_tests PRIVATE tcp_client_test.cpp)
     target_link_libraries(chatroom_tests PRIVATE chatroom_client_net Threads::Threads)
+    target_compile_definitions(chatroom_tests PRIVATE CHATROOM_CLIENT_PATH="$<TARGET_FILE:chatroom_client>")
+    add_dependencies(chatroom_tests chatroom_client)
 endif()
 
 include(Catch)
