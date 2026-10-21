@@ -1,4 +1,5 @@
 #include "net/tcp_client.h"
+#include "protocol.h"
 
 #include <arpa/inet.h>
 #include <array>
@@ -214,6 +215,82 @@ TEST_CASE("The client sends frames and retains consecutive replies", "[client]")
     CHECK(client.receive() == payload);
     CHECK(client.receive() == "next");
     CHECK_FALSE(client.receive().has_value());
+    peer.check();
+}
+
+TEST_CASE("Console deduplicates messages but acknowledges every delivery alongside terminal requests",
+          "[client][console][ack]") {
+    int acknowledgments = 0;
+    int requests = 0;
+    const auto notice = make_notification("message", {{"message_id", "7"}, {"sender_id", "1"},
+        {"client_message_id", "m1"}, {"text", "Display this message once"}}).dump();
+    TestPeer peer([&](int fd) {
+        for (int i = 0; i < 16; ++i) send_bytes(fd, encode_frame(notice));
+        while (acknowledgments < 16 || requests < 8) {
+            const auto request = parse_request(receive_payload(fd));
+            if (request.action == "ack_message") {
+                if (request.data.at("message_id") != "7") throw std::runtime_error("Wrong ACK identity");
+                ++acknowledgments;
+            } else if (request.action == "ping") {
+                if (request.data.at("text") != std::string(16000, 'x')) {
+                    throw std::runtime_error("Concurrent sends corrupted a request");
+                }
+                ++requests;
+            } else {
+                throw std::runtime_error("Unexpected console request");
+            }
+        }
+        send_bytes(fd, encode_frame(make_response(Request{"done", "ping"}, {{"finished", true}}).dump()));
+    });
+    ConsoleProcess console(peer.port());
+    for (int i = 0; i < 8; ++i) {
+        console.write(nlohmann::json{{"type", "request"}, {"request_id", "p" + std::to_string(i)},
+            {"action", "ping"}, {"data", {{"text", std::string(16000, 'x')}}}}.dump() + "\n");
+    }
+    const auto& output = console.read_until("Disconnected.");
+    const auto first = output.find("Display this message once");
+    REQUIRE(first != std::string::npos);
+    CHECK(output.find("Display this message once", first + 1) == std::string::npos);
+    console.check();
+    peer.check();
+    CHECK(acknowledgments == 16);
+    CHECK(requests == 8);
+}
+
+TEST_CASE("Console displays final messages after stdin EOF without sending on a half-closed socket",
+          "[client][console][ack]") {
+    TestPeer peer([](int fd) {
+        receive_payload(fd);
+        char byte;
+        if (::recv(fd, &byte, 1, 0) != 0) throw std::runtime_error("Expected stdin EOF half-close");
+        send_bytes(fd, encode_frame(make_notification("message", {{"message_id", "8"},
+            {"sender_id", "1"}, {"client_message_id", "m1"}, {"text", "Final delivery"}}).dump()));
+    });
+    ConsoleProcess console(peer.port());
+    console.write(R"({"type":"request","request_id":"p","action":"ping"})" "\n");
+    console.finish_input();
+    const auto& output = console.read_until("Disconnected.");
+    CHECK(output.find("Final delivery") != std::string::npos);
+    console.check();
+    peer.check();
+}
+
+TEST_CASE("Console displays malformed notifications without acknowledging them", "[client][console][ack]") {
+    TestPeer peer([](int fd) {
+        const auto invalid = make_notification("message", {{"message_id", "9"}, {"sender_id", 1},
+            {"client_message_id", "m1"}, {"text", "Malformed delivery"}}).dump();
+        send_bytes(fd, encode_frame(invalid));
+        send_bytes(fd, encode_frame(std::string(65, '[') + "0" + std::string(65, ']')));
+        send_bytes(fd, encode_frame(make_response(Request{"marker", "ping"}).dump()));
+        if (parse_request(receive_payload(fd)).request_id != "terminal") {
+            throw std::runtime_error("Malformed notifications must not be acknowledged");
+        }
+    });
+    ConsoleProcess console(peer.port());
+    console.read_until("\"marker\"");
+    console.write(R"({"type":"request","request_id":"terminal","action":"ping"})" "\n");
+    console.read_until("Disconnected.");
+    console.check();
     peer.check();
 }
 

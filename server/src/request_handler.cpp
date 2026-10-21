@@ -1,5 +1,6 @@
 #include "request_handler.h"
 #include "db/chat_store.h"
+#include "framing.h"
 
 #include <algorithm>
 #include <charconv>
@@ -14,7 +15,7 @@ std::unique_ptr<Database>& worker_database() {
     return connection;
 }
 
-std::optional<std::uint64_t> parse_user_id(const nlohmann::json& value) {
+std::optional<std::uint64_t> parse_id(const nlohmann::json& value) {
     if (!value.is_string()) return std::nullopt;
     const auto& text = value.get_ref<const std::string&>();
     std::uint64_t id = 0;
@@ -46,6 +47,7 @@ RequestResult RequestHandler::handle(const Request& request, std::optional<Sessi
             return {make_error_response(request, "authentication_required", "Authenticate before using this action")};
         }
         if (request.action == "send_message") return send_message(request, session->user_id);
+        if (request.action == "ack_message") return acknowledge_message(request, session->user_id);
         return {make_error_response(request, "unknown_action", "Action is not supported")};
     } catch (const DatabaseError&) {
         worker_database().reset();
@@ -98,7 +100,7 @@ RequestResult RequestHandler::send_message(const Request& request, std::uint64_t
     }
     std::vector<std::uint64_t> recipients;
     for (const auto& value : *targets) {
-        const auto id = parse_user_id(value);
+        const auto id = parse_id(value);
         if (!id) {
             return {make_error_response(request, "invalid_request", "recipients must contain positive user ID strings")};
         }
@@ -123,6 +125,45 @@ RequestResult RequestHandler::send_message(const Request& request, std::uint64_t
          {"client_message_id", *client_id}, {"text", *text}});
     return {make_response(request, {{"message_id", std::to_string(message)}}), std::nullopt,
             UserNotification{std::move(recipients), notification.dump()}};
+}
+
+RequestResult RequestHandler::acknowledge_message(const Request& request, std::uint64_t recipient) const {
+    const auto value = request.data.find("message_id");
+    const auto id = value == request.data.end() ? std::nullopt : parse_id(*value);
+    if (!id) {
+        return {make_error_response(request, "invalid_request", "message_id must be a positive message ID string")};
+    }
+    ChatStore store(database());
+    if (!store.acknowledge_message(recipient, *id)) {
+        return {make_error_response(request, "invalid_message", "Message delivery does not exist")};
+    }
+    return {make_response(request, {{"message_id", std::to_string(*id)}}), std::nullopt,
+            std::nullopt, *id};
+}
+
+std::vector<MessageDelivery> RequestHandler::pending_messages(std::uint64_t recipient) const {
+    try {
+        ChatStore store(database());
+        std::vector<MessageDelivery> deliveries;
+        std::size_t bytes = 0;
+        for (const auto& message : store.pending_messages(recipient, kReplayBatchCount)) {
+            nlohmann::json data{{"message_id", std::to_string(message.id)},
+                {"sender_id", std::to_string(message.sender_id)},
+                {"client_message_id", message.client_message_id}, {"text", message.text}};
+            if (message.group_id) data["group_id"] = std::to_string(*message.group_id);
+            auto payload = make_notification("message", std::move(data)).dump();
+            if (payload.size() > kMaxFrameSize) {
+                throw std::length_error("Stored message exceeds the 64 KiB frame limit");
+            }
+            if (bytes + payload.size() + 4 > kReplayBatchBytes) break;
+            bytes += payload.size() + 4;
+            deliveries.push_back({message.id, std::move(payload)});
+        }
+        return deliveries;
+    } catch (const DatabaseError&) {
+        worker_database().reset();
+        throw;
+    }
 }
 
 } // namespace chatroom

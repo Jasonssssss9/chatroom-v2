@@ -14,9 +14,10 @@ The server currently supports:
 - Persisted private and multi-recipient messages with online notifications.
 - Consistent errors for malformed JSON, invalid requests, and unsupported actions.
 - Server-initiated `message` notifications.
+- Recipient acknowledgments and bounded replay after authentication.
 
-The implemented actions are `ping`, `authenticate`, and `send_message`. Groups,
-acknowledgments, offline replay, and file transfers are not implemented yet.
+The implemented actions are `ping`, `authenticate`, `send_message`, and `ack_message`.
+Groups and file transfers are not implemented yet.
 They do not return success placeholders.
 
 ## 2. Framing
@@ -56,7 +57,7 @@ These roles replace v1's `REQ`, `RES`, and `INF`. Operation names such as `ping`
 
 The server currently accepts only `request` envelopes from clients. Sending a
 `response` or `notification` to the server is an `invalid_request`. Future message
-acknowledgments will be requests with an `ack` action, not response envelopes.
+acknowledgments are requests with an `ack_message` action, not response envelopes.
 
 ### Requests
 
@@ -203,8 +204,7 @@ recipient's requests:
 
 A notification has an action and object data. It has no `request_id` or `ok` field
 because it is not the result of a client request. Each delivery carries a
-`message_id`; receivers can use it for deduplication. Network acknowledgments
-will be added separately.
+`message_id`; receivers use it for deduplication and send an `ack_message` request.
 
 ## 4. Implemented Actions
 
@@ -298,8 +298,8 @@ IDs for correlation.
 
 A success response confirms persistence, not receipt or reading. Offline users,
 disconnects, or output-buffer failures leave the delivery pending in MySQL.
-Automatic replay and `ack` are not implemented yet. If the sender disconnects
-while its task runs, a committed message can still notify online recipients.
+Authentication triggers automatic replay of pending deliveries. If the sender
+disconnects while its task runs, a committed message can still notify online recipients.
 
 For a retry, reuse `client_message_id`, text, and the same recipient set. The
 stored `message_id` is returned without extra database deliveries; online
@@ -308,6 +308,44 @@ text or recipients receives `message_conflict`. Use a new client ID for a new
 message. Different senders may use the same client ID independently.
 
 See [Messaging](messaging.md) for a two-client walkthrough.
+
+### ack_message
+
+After accepting a `message` notification, acknowledge its persisted ID:
+
+```json
+{"type":"request","request_id":"ack-105","action":"ack_message","data":{"message_id":"105"}}
+```
+
+`message_id` is a required positive unsigned 64-bit decimal string, with the same
+canonical formatting rules as user IDs. The server obtains the recipient from
+the session; extra fields cannot select another recipient. Success returns:
+
+```json
+{"type":"response","request_id":"ack-105","action":"ack_message","ok":true,"data":{"message_id":"105"}}
+```
+
+Repeated acknowledgments succeed without changing the original acknowledgment
+time. An unknown message or a delivery belonging to another user receives
+`invalid_message`. ACK means that this client accepted the message, not that a
+person read it. Acknowledged delivery rows remain stored so sender retries cannot
+recreate them.
+
+After successful authentication, the Reactor binds the session before querying
+pending deliveries on a worker. The authentication response precedes replay
+notifications. Each batch contains at most 16 messages and 128 KiB of serialized
+frames, including four-byte headers. Each notification is a separate frame with
+the normal 64 KiB payload limit. The next batch is queried after all IDs in the
+current batch have successful ACKs. Duplicate or unrelated ACKs do not advance it.
+Reauthentication starts a fresh replay query for remaining unacknowledged messages.
+
+New online notifications can interleave with replay and responses. Messages may
+repeat after disconnects, sender retries, or concurrent online delivery and replay.
+Deduplicate by `message_id` but acknowledge every copy. Replay queries always
+select unacknowledged rows, without a permanent highest-ID cursor. There is no
+timed retransmission on the same connection; an unacknowledged batch waits for
+ACKs or a new authentication. A replay failure is logged and closes that
+connection; pending deliveries remain in MySQL for reconnect.
 
 ## 5. Current Errors and Connection Behavior
 
@@ -320,6 +358,7 @@ See [Messaging](messaging.md) for a two-client walkthrough.
 | `authentication_required` | Action requires an unexpired session | Kept open |
 | `invalid_recipient` | At least one recipient does not exist | Kept open |
 | `message_conflict` | A sender reuses a client message ID with different text or recipients | Kept open |
+| `invalid_message` | No delivery with this message ID belongs to the authenticated user | Kept open |
 | `unknown_action` | Authenticated request with an unsupported action | Kept open |
 | `internal_error` | Unexpected application-handler or response serialization failure | Kept open |
 | `response_too_large` | Serialized response or notification exceeds 65,536 bytes | Kept open |
@@ -359,7 +398,7 @@ features while assigning readable operation names and the appropriate transport.
 
 HTTP registration, login, TCP authentication, and direct or multi-recipient sends
 are implemented. See [Authentication](authentication.md) and [Messaging](messaging.md).
-Logout, groups, acknowledgments, and file transfers remain planned.
+Logout, groups, and file transfers remain planned.
 
 | v1 operation | v2 operation | Transport |
 | --- | --- | --- |
@@ -381,7 +420,7 @@ The action data is intentionally small:
 | `send_message` (implemented) | `client_message_id`, `recipients` (array of user ID strings), `text` |
 | `create_group` | `name`, `members` (array of user ID strings) |
 | `send_group_message` | `client_message_id`, `group_id`, `text` |
-| `ack` | `message_id` |
+| `ack_message` (implemented) | `message_id` |
 | `logout` | Empty object |
 
 The remaining payload fields will be implemented and validated with their business services.
@@ -398,7 +437,7 @@ The three message-related IDs have different jobs:
 | `message_id` | Server | Identify a persisted delivery for acknowledgment and deduplication |
 
 Successful sends confirm that the server has persisted the message. Receiver
-acknowledgments will be separate `ack` requests.
+acknowledgments are separate `ack_message` requests.
 
 ## 7. Code Layout and Extension
 

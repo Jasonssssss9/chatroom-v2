@@ -56,9 +56,10 @@ public:
     }
 
     void use_session_workers(RequestDispatcher::Handler handler, std::size_t worker_count = 2,
-                             std::size_t per_connection = 32, std::size_t total = 1024) {
+                             std::size_t per_connection = 32, std::size_t total = 1024,
+                             RequestDispatcher::ReplayHandler replay = {}) {
         dispatcher = std::make_unique<RequestDispatcher>(server, std::move(handler), worker_count,
-                                                         per_connection, total);
+                                                         per_connection, total, std::move(replay));
         server.set_message_handler([this](ConnectionId id, std::string payload) {
             dispatcher->enqueue(id, std::move(payload));
         });
@@ -339,6 +340,88 @@ TEST_CASE("Shutdown signals stop the Reactor and wait for submitted work", "[ser
     const int status = child.wait();
     REQUIRE(WIFEXITED(status));
     CHECK(WEXITSTATUS(status) == 0);
+}
+
+TEST_CASE("Sessions are online before replay queries and live messages arrive during replay",
+          "[server][replay][message]") {
+    std::promise<void> started;
+    auto querying = started.get_future();
+    std::atomic<int> queries{0};
+    RunningServer fixture;
+    TaskGate gate;
+    const auto old_message = make_notification("message", {{"message_id", "1"}}).dump();
+    const auto new_message = make_notification("message", {{"message_id", "2"}}).dump();
+    fixture.use_session_workers([&](ConnectionId, const Request& request, std::optional<Session>) {
+        if (request.action == "authenticate") {
+            return RequestResult{make_response(request), Session{7, std::chrono::system_clock::now() + 1h}};
+        }
+        if (request.action == "ack_message") {
+            return RequestResult{make_response(request), std::nullopt, std::nullopt, 1};
+        }
+        if (request.action == "send_message") {
+            return RequestResult{make_response(request), std::nullopt, UserNotification{{7}, new_message}};
+        }
+        return RequestResult{make_response(request, {{"pong", true}})};
+    }, 2, 2, 2, [&, wait = gate.future](std::uint64_t user) {
+        if (user != 7) throw std::runtime_error("Wrong replay identity");
+        if (++queries != 1) return std::vector<MessageDelivery>{};
+        started.set_value();
+        wait.wait();
+        return std::vector<MessageDelivery>{{1, old_message}};
+    });
+    fixture.start();
+    auto recipient = connect_client(fixture.server.port());
+    send_all(recipient.get(), encode_frame(R"({"type":"request","request_id":"a","action":"authenticate"})"));
+    REQUIRE(nlohmann::json::parse(receive_frame(recipient.get()))["ok"] == true);
+    REQUIRE(querying.wait_for(2s) == std::future_status::ready);
+    std::promise<bool> bound;
+    auto online = bound.get_future();
+    fixture.server.post([&] { bound.set_value(fixture.dispatcher->sessions().connection_for(7).has_value()); });
+    REQUIRE(online.wait_for(2s) == std::future_status::ready);
+    CHECK(online.get());
+    auto sender = connect_client(fixture.server.port());
+    send_all(sender.get(), encode_frame(R"({"type":"request","request_id":"s","action":"send_message"})"));
+    CHECK(nlohmann::json::parse(receive_frame(sender.get()))["ok"] == true);
+    CHECK(receive_frame(recipient.get()) == new_message);
+    gate.release();
+    CHECK(receive_frame(recipient.get()) == old_message);
+    send_all(recipient.get(), encode_frame(R"({"type":"request","request_id":"ack","action":"ack_message"})") +
+                              encode_frame(R"({"type":"request","request_id":"p","action":"ping"})"));
+    CHECK(nlohmann::json::parse(receive_frame(recipient.get()))["ok"] == true);
+    CHECK(nlohmann::json::parse(receive_frame(recipient.get()))["data"]["pong"] == true);
+    CHECK(queries == 2);
+    fixture.check();
+}
+
+TEST_CASE("Replay failures close only their connection and release request capacity", "[server][replay]") {
+    int failure = 0;
+    SECTION("Database failure") {}
+    SECTION("Unknown exception") { failure = 1; }
+    SECTION("Oversized frame") { failure = 2; }
+    SECTION("Too many messages") { failure = 3; }
+    SECTION("Too many serialized bytes") { failure = 4; }
+    RunningServer fixture;
+    fixture.use_session_workers([](ConnectionId, const Request& request, std::optional<Session>) {
+        if (request.action == "authenticate") {
+            return RequestResult{make_response(request), Session{7, std::chrono::system_clock::now() + 1h}};
+        }
+        return RequestResult{make_response(request, {{"pong", true}})};
+    }, 1, 1, 1, [failure](std::uint64_t) -> std::vector<MessageDelivery> {
+        if (failure == 0) throw std::runtime_error("");
+        if (failure == 1) throw 42;
+        if (failure == 2) return {{1, std::string(kMaxFrameSize + 1, 'x')}};
+        if (failure == 3) return std::vector<MessageDelivery>(kReplayBatchCount + 1, {1, "{}"});
+        return {{1, std::string(kMaxFrameSize, 'x')}, {2, std::string(kMaxFrameSize, 'x')}};
+    });
+    fixture.start();
+    auto client = connect_client(fixture.server.port());
+    send_all(client.get(), encode_frame(R"({"type":"request","request_id":"a","action":"authenticate"})"));
+    CHECK(nlohmann::json::parse(receive_frame(client.get()))["ok"] == true);
+    expect_closed(client.get());
+    auto next = connect_client(fixture.server.port());
+    send_all(next.get(), encode_frame(R"({"type":"request","request_id":"p","action":"ping"})"));
+    CHECK(nlohmann::json::parse(receive_frame(next.get()))["data"]["pong"] == true);
+    fixture.check();
 }
 
 TEST_CASE("Connection limits preserve active clients and allow later connections", "[server]") {

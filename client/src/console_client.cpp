@@ -1,6 +1,8 @@
 #include "console_client.h"
+#include "protocol.h"
 
 #include <cerrno>
+#include <charconv>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <poll.h>
@@ -10,6 +12,31 @@
 #include <thread>
 
 namespace chatroom {
+namespace {
+std::optional<std::string> notification_id(std::string_view payload) {
+    try {
+        const auto message = parse_json(payload);
+        if (!message.is_object() || message.value("type", nlohmann::json{}) != "notification" ||
+            message.value("action", nlohmann::json{}) != "message") return std::nullopt;
+        const auto data = message.find("data");
+        if (data == message.end() || !data->is_object()) return std::nullopt;
+        for (const auto* field : {"sender_id", "client_message_id", "text"}) {
+            const auto value = data->find(field);
+            if (value == data->end() || !value->is_string()) return std::nullopt;
+        }
+        const auto value = data->find("message_id");
+        if (value == data->end() || !value->is_string()) return std::nullopt;
+        const auto& text = value->get_ref<const std::string&>();
+        std::uint64_t id = 0;
+        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), id);
+        if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() &&
+            id != 0 && text.front() != '0') return text;
+    } catch (const ProtocolError&) {
+        // Keep displaying unexpected server payloads without acknowledging them.
+    }
+    return std::nullopt;
+}
+} // namespace
 
 ConsoleClient::ConsoleClient(TcpClient& client)
     : client_(client), receiver_done_(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)) {
@@ -36,6 +63,7 @@ bool ConsoleClient::send_line(std::string_view line) {
     if (!nlohmann::json::accept(line.begin(), line.end())) {
         print("Invalid JSON. Enter a JSON request or /quit.\n> ");
     } else {
+        std::lock_guard<std::mutex> lock(send_mutex_);
         client_.send(line);
         print("> ");
     }
@@ -96,10 +124,31 @@ ConsoleClient::InputResult ConsoleClient::read_input() {
     }
 }
 
+void ConsoleClient::display_message(std::string_view payload) {
+    const auto id = notification_id(payload);
+    if (!id) {
+        print("\n< " + std::string(payload) + "\n> ");
+        return;
+    }
+    if (received_messages_.insert(*id).second) {
+        recent_messages_.push_back(*id);
+        // A bounded, in-memory history; older duplicates can be displayed again.
+        if (recent_messages_.size() > 1024) {
+            received_messages_.erase(recent_messages_.front());
+            recent_messages_.pop_front();
+        }
+        print("\n< " + std::string(payload) + "\n> ");
+    }
+    const auto ack = nlohmann::json{{"type", "request"}, {"request_id", "ack-" + *id},
+        {"action", "ack_message"}, {"data", {{"message_id", *id}}}}.dump();
+    std::lock_guard<std::mutex> lock(send_mutex_);
+    if (!sending_finished_) client_.send(ack);
+}
+
 void ConsoleClient::receive_messages() {
     try {
         while (auto payload = client_.receive()) {
-            print("\n< " + *payload + "\n> ");
+            display_message(*payload);
         }
     } catch (...) {
         receive_error_ = std::current_exception();
@@ -119,6 +168,8 @@ void ConsoleClient::run() {
     try {
         result = read_input();
         if (result == InputResult::eof) {
+            std::lock_guard<std::mutex> lock(send_mutex_);
+            sending_finished_ = true;
             client_.finish_sending();
         } else {
             client_.disconnect();

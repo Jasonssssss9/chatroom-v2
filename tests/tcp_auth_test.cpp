@@ -27,7 +27,7 @@ public:
         : handler(tokens, database),
           dispatcher(server, [this](ConnectionId, const Request& request, std::optional<Session> session) {
               return handler.handle(request, session);
-          }, 2),
+          }, 2, 32, 1024, [this](std::uint64_t user) { return handler.pending_messages(user); }),
           http(auth, database, "127.0.0.1", HttpConfig{0, 2}) {
         server.set_message_handler([this](ConnectionId id, std::string payload) {
             dispatcher.enqueue(id, std::move(payload));
@@ -205,9 +205,13 @@ TEST_CASE("TCP database errors do not bind sessions or stop the Reactor", "[data
 }
 
 namespace {
-void authenticate(Peer& peer, const RunningChat& running, std::uint64_t user) {
+void authenticate(Peer& peer, const RunningChat& running, std::uint64_t user, bool empty_inbox = true) {
     peer.send("authenticate", {{"token", running.tokens.issue(user)}});
     REQUIRE(peer.receive()["data"]["user_id"] == std::to_string(user));
+    if (empty_inbox) {
+        peer.send("ping");
+        REQUIRE(peer.receive()["data"]["pong"] == true);
+    }
 }
 
 json message_data(const std::string& client_id, const std::vector<std::uint64_t>& recipients,
@@ -379,5 +383,102 @@ TEST_CASE("Message byte limits remain safe after JSON escaping", "[database][tcp
     REQUIRE(fixture.store.pending_messages(bob).size() == 1);
     CHECK(fixture.store.pending_messages(bob)[0].text == text);
     CHECK(fixture.count("message_deliveries") == 1);
+    running.check();
+}
+
+TEST_CASE("Offline deliveries replay until acknowledged and acknowledgments belong to the recipient",
+          "[database][tcp][message][ack][replay]") {
+    DatabaseFixture fixture;
+    const auto alice = fixture.store.create_user("alice", "unused-test-hash");
+    const auto bob = fixture.store.create_user("bob", "unused-test-hash");
+    const auto other = fixture.store.create_user("other", "unused-test-hash");
+    RunningChat running;
+    Peer sender(running.server.port());
+    authenticate(sender, running, alice);
+    sender.send("send_message", message_data("offline-1", {bob}, "Saved while offline"));
+    const auto sent = sender.receive();
+    REQUIRE(sent["ok"] == true);
+    const auto message = sent["data"]["message_id"];
+    json original;
+    {
+        Peer recipient(running.server.port());
+        authenticate(recipient, running, bob, false);
+        original = recipient.receive();
+        CHECK(original["data"]["message_id"] == message);
+        CHECK(original["data"]["text"] == "Saved while offline");
+    }
+    Peer recipient(running.server.port());
+    authenticate(recipient, running, bob, false);
+    CHECK(recipient.receive() == original);
+    Peer outsider(running.server.port());
+    authenticate(outsider, running, other);
+    outsider.send("ack_message", {{"message_id", message}, {"recipient_id", std::to_string(bob)}});
+    CHECK(outsider.receive()["error"]["code"] == "invalid_message");
+    REQUIRE(fixture.store.pending_messages(bob).size() == 1);
+    for (int i = 0; i < 2; ++i) {
+        recipient.send("ack_message", {{"message_id", message}});
+        const auto response = recipient.receive();
+        CHECK(response["ok"] == true);
+        CHECK(response["data"]["message_id"] == message);
+    }
+    CHECK(fixture.store.pending_messages(bob).empty());
+    recipient.send("ack_message", {{"message_id", "18446744073709551615"}});
+    CHECK(recipient.receive()["error"]["code"] == "invalid_message");
+    Peer reconnected(running.server.port());
+    authenticate(reconnected, running, bob);
+    sender.send("send_message", message_data("offline-1", {bob}, "Saved while offline"));
+    CHECK(sender.receive()["data"]["message_id"] == message);
+    CHECK(reconnected.receive() == original);
+    CHECK(fixture.store.pending_messages(bob).empty());
+    running.check();
+}
+
+TEST_CASE("Replay advances only after its batch is acknowledged and respects count and byte limits",
+          "[database][tcp][message][replay]") {
+    std::string text = "Small message";
+    SECTION("Count limit") {}
+    SECTION("Escaped bytes limit") { text.assign(4096, '\0'); }
+    DatabaseFixture fixture;
+    const auto sender = fixture.store.create_user("sender", "unused-test-hash");
+    const auto recipient = fixture.store.create_user("recipient", "unused-test-hash");
+    for (std::size_t i = 0; i < kReplayBatchCount + 3; ++i) {
+        fixture.store.save_direct_message(sender, "batch-" + std::to_string(i), text, {recipient});
+    }
+    RunningChat running;
+    Peer peer(running.server.port());
+    authenticate(peer, running, recipient, false);
+    std::size_t total = 0;
+    while (total < kReplayBatchCount + 3) {
+        const auto batch = running.handler.pending_messages(recipient);
+        REQUIRE_FALSE(batch.empty());
+        CHECK(batch.size() <= kReplayBatchCount);
+        if (total == 0) CHECK(batch.size() == (text.front() == '\0' ? 5 : kReplayBatchCount));
+        std::size_t bytes = 0;
+        for (const auto& delivery : batch) {
+            const auto notice = peer.receive();
+            CHECK(notice["data"]["message_id"] == std::to_string(delivery.message_id));
+            CHECK(notice["data"]["text"] == text);
+            bytes += notice.dump().size() + 4;
+        }
+        CHECK(bytes <= kReplayBatchBytes);
+        peer.send("ping");
+        CHECK(peer.receive()["data"]["pong"] == true);
+        for (std::size_t i = 0; i < batch.size(); ++i) {
+            peer.send("ack_message", {{"message_id", std::to_string(batch[i].message_id)}});
+            CHECK(peer.receive()["ok"] == true);
+            if (i == 0 && batch.size() > 1) {
+                peer.send("ack_message", {{"message_id", std::to_string(batch[i].message_id)}});
+                CHECK(peer.receive()["ok"] == true);
+            }
+            if (i + 1 < batch.size()) {
+                peer.send("ping");
+                CHECK(peer.receive()["data"]["pong"] == true);
+            }
+        }
+        total += batch.size();
+    }
+    CHECK(fixture.store.pending_messages(recipient).empty());
+    peer.send("ping");
+    CHECK(peer.receive()["data"]["pong"] == true);
     running.check();
 }

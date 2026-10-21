@@ -78,7 +78,8 @@ int main(int argc, char* argv[]) {
                 server, [&handler](chatroom::ConnectionId, const chatroom::Request& request,
                                    std::optional<chatroom::Session> session) {
                     return handler.handle(request, session);
-                }, config.worker_threads, config.max_requests_per_connection, config.max_pending_requests);
+                }, config.worker_threads, config.max_requests_per_connection, config.max_pending_requests,
+                [&handler](std::uint64_t user) { return handler.pending_messages(user); });
             server.set_message_handler([&](chatroom::ConnectionId id, std::string payload) {
                 dispatcher.enqueue(id, std::move(payload));
             });

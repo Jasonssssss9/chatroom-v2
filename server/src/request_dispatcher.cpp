@@ -39,8 +39,8 @@ std::string serialize_response(const Request& request, nlohmann::json& response)
 
 RequestDispatcher::RequestDispatcher(TcpServer& server, Handler handler, std::size_t worker_count,
                                      std::size_t max_requests_per_connection,
-                                     std::size_t max_pending_requests)
-    : server_(server), handler_(std::move(handler)),
+                                     std::size_t max_pending_requests, ReplayHandler replay)
+    : server_(server), handler_(std::move(handler)), replay_(std::move(replay)),
       max_requests_per_connection_(max_requests_per_connection),
       max_pending_requests_(max_pending_requests), workers_(worker_count) {
     if (max_requests_per_connection_ == 0 || max_pending_requests_ == 0) {
@@ -69,7 +69,7 @@ void RequestDispatcher::enqueue(ConnectionId id, std::string payload) {
     ++pending_requests_;
     if (!state.active) {
         server_.defer_close(id);
-        start_next(id);
+        advance(id);
     }
 }
 
@@ -103,12 +103,14 @@ RequestDispatcher::Completion RequestDispatcher::process(
         nlohmann::json response;
         std::optional<Session> authenticated;
         std::optional<UserNotification> notification;
+        std::optional<std::uint64_t> acknowledged;
         try {
             request = parse_request(payload);
             auto result = handler_(id, request, session);
             response = std::move(result.response);
             authenticated = result.authenticated_session;
             notification = std::move(result.notification);
+            acknowledged = result.acknowledged_message;
         } catch (const ProtocolError& error) {
             request = error.request;
             response = make_error_response(request, error.code, error.what());
@@ -120,13 +122,15 @@ RequestDispatcher::Completion RequestDispatcher::process(
         if (!response.value("ok", true)) {
             authenticated.reset();
             notification.reset();
+            acknowledged.reset();
             const auto& error = response.at("error");
             log_request_error(id, request, error.at("code").get<std::string>(),
                               error.at("message").get<std::string>());
         } else {
             log(LogLevel::debug, "request_completed", request_context(id, request));
         }
-        return {std::move(serialized), authenticated, {request.request_id, request.action}, std::move(notification)};
+        return {std::move(serialized), authenticated, {request.request_id, request.action},
+                std::move(notification), acknowledged};
     } catch (const std::exception& error) {
         log_request_error(id, request, "internal_error", error.what());
     } catch (...) {
@@ -154,11 +158,18 @@ void RequestDispatcher::complete(ConnectionId id, Completion result) {
             }
             log(LogLevel::info, "session_authenticated",
                 {{"connection_id", id}, {"user_id", result.session->user_id}});
+            it->second.replay_in_flight.clear();
+            it->second.replay_requested = static_cast<bool>(replay_);
         }
     }
     if (it != requests_.end()) {
         it->second.active = false;
         server_.send(id, result.response);
+        auto& in_flight = it->second.replay_in_flight;
+        if (result.acknowledged_message && in_flight.erase(*result.acknowledged_message) != 0 &&
+            in_flight.empty()) {
+            it->second.replay_requested = true;
+        }
     }
     // A committed message remains deliverable even if its sender disconnected.
     if (result.notification) {
@@ -169,12 +180,71 @@ void RequestDispatcher::complete(ConnectionId id, Completion result) {
         }
     }
     if (it == requests_.end()) return;
-    if (it->second.waiting.empty()) {
-        requests_.erase(it);
-        server_.resume_close(id);
-    } else {
+    advance(id);
+}
+
+void RequestDispatcher::advance(ConnectionId id) {
+    auto& state = requests_.at(id);
+    const auto session = sessions_.session(id);
+    if (state.replay_requested && state.replay_in_flight.empty() && session && !session->expired() &&
+        state.waiting.size() < max_requests_per_connection_ && pending_requests_ < max_pending_requests_) {
+        state.replay_requested = false;
+        start_replay(id, session->user_id);
+    } else if (!state.waiting.empty()) {
         start_next(id);
+    } else {
+        server_.resume_close(id);
     }
+}
+
+void RequestDispatcher::start_replay(ConnectionId id, std::uint64_t user) {
+    requests_.at(id).active = true;
+    ++pending_requests_;
+    workers_.submit([this, id, user] {
+        std::vector<MessageDelivery> deliveries;
+        std::optional<std::string> error;
+        try {
+            deliveries = replay_(user);
+            std::size_t bytes = 0;
+            for (const auto& delivery : deliveries) {
+                if (delivery.payload.size() > kMaxFrameSize) {
+                    throw std::length_error("Replay notification exceeds the frame limit");
+                }
+                bytes += delivery.payload.size() + 4;
+            }
+            if (deliveries.size() > kReplayBatchCount || bytes > kReplayBatchBytes) {
+                throw std::length_error("Replay exceeds the batch limit");
+            }
+        } catch (const std::exception& failure) {
+            error = failure.what();
+        } catch (...) {
+            error = "Unknown exception";
+        }
+        server_.post([this, id, deliveries = std::move(deliveries), error = std::move(error)]() mutable {
+            complete_replay(id, std::move(deliveries), std::move(error));
+        });
+    });
+}
+
+void RequestDispatcher::complete_replay(ConnectionId id, std::vector<MessageDelivery> deliveries,
+                                        std::optional<std::string> error) {
+    --pending_requests_;
+    const auto it = requests_.find(id);
+    if (it == requests_.end()) return;
+    it->second.active = false;
+    if (error) {
+        log(LogLevel::error, "message_replay_failed", {{"connection_id", id}, {"error", *error}});
+        server_.close_connection(id, "message_replay_failed");
+        return;
+    }
+    const auto session = sessions_.session(id);
+    if (session && !session->expired()) {
+        for (const auto& delivery : deliveries) {
+            it->second.replay_in_flight.insert(delivery.message_id);
+            server_.send(id, delivery.payload);
+        }
+    }
+    advance(id);
 }
 
 } // namespace chatroom

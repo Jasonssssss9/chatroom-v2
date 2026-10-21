@@ -18,8 +18,9 @@ groups, messages, acknowledgments, and file metadata are implemented. The server
 checks database connectivity at startup. HTTP registration, login, password hashing,
 and JWT issuance are implemented. TCP verifies JWTs and binds users to connections,
 with one online connection per user. Private messages and multi-recipient sends
-are persisted before online notifications. ACK handling, offline replay, group
-chat, and file transfers are still planned.
+are persisted before online notifications. Clients acknowledge deliveries, and
+authentication triggers bounded replay of unacknowledged messages. Group chat
+and file transfers are still planned.
 
 ## Project Layout
 

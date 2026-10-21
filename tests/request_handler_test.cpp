@@ -139,3 +139,24 @@ TEST_CASE("Message input is validated before accessing MySQL", "[handler][messag
         CHECK_FALSE(result.notification);
     }
 }
+
+TEST_CASE("Message acknowledgments validate identity and IDs before accessing MySQL", "[handler][ack]") {
+    const RequestHandler handler(kTestTokens, {});
+    const Session session{7, std::chrono::system_clock::now() + std::chrono::hours(1)};
+    const Request request{"a1", "ack_message", {{"message_id", "1"}}};
+    CHECK(handler.handle(request).response["error"]["code"] == "authentication_required");
+    const Session expired{7, std::chrono::system_clock::now() - std::chrono::seconds(1)};
+    CHECK(handler.handle(request, expired).response["error"]["code"] == "authentication_required");
+    std::vector<json> invalid{json::object()};
+    for (const auto& value : {json(nullptr), json(1), json(""), json("0"), json("01"),
+                              json("-1"), json("+1"), json("1x"), json(" 1"),
+                              json("18446744073709551616")}) {
+        invalid.push_back({{"message_id", value}});
+    }
+    for (const auto& data : invalid) {
+        const auto result = handler.handle(Request{"a1", "ack_message", data}, session);
+        CHECK(result.response["request_id"] == "a1");
+        CHECK(result.response["error"]["code"] == "invalid_request");
+        CHECK_FALSE(result.acknowledged_message);
+    }
+}

@@ -162,6 +162,15 @@ Output is serialized with a mutex. `/quit` cancels I/O immediately; standard-inp
 EOF finishes sending and waits for the peer to close after its final replies.
 Ctrl+C uses normal process termination.
 
+The receiver recognizes `message` notifications, suppresses recent duplicate IDs,
+and sends `ack_message` after display. It acknowledges duplicate copies too. A
+send mutex serializes automatic ACKs with terminal requests and the EOF half-close;
+the underlying `TcpClient` still requires one sender at a time. The receive thread
+alone owns the bounded history of 1,024 IDs. Server JSON is parsed with the shared
+nesting limit; unexpected payloads are displayed without automatic acknowledgment.
+After stdin EOF, notifications can still be displayed but cannot be acknowledged
+on the half-closed socket. Keep stdin open to receive and acknowledge replay batches.
+
 ## Tests
 
 Catch2 tests use local TCP connections and socket pairs. They cover partial frames,

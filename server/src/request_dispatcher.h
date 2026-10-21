@@ -6,6 +6,8 @@
 #include "session_manager.h"
 #include "thread_pool.h"
 
+#include <unordered_set>
+
 namespace chatroom {
 
 // Serializes each connection's requests while allowing different connections to run
@@ -14,10 +16,11 @@ namespace chatroom {
 class RequestDispatcher {
 public:
     using Handler = std::function<RequestResult(ConnectionId, const Request&, std::optional<Session>)>;
+    using ReplayHandler = std::function<std::vector<MessageDelivery>(std::uint64_t)>;
 
     RequestDispatcher(TcpServer& server, Handler handler, std::size_t worker_count = 4,
                       std::size_t max_requests_per_connection = 32,
-                      std::size_t max_pending_requests = 1024);
+                      std::size_t max_pending_requests = 1024, ReplayHandler replay = {});
 
     // Called by the Reactor's message and disconnect callbacks.
     void enqueue(ConnectionId id, std::string payload);
@@ -29,6 +32,9 @@ private:
     struct ConnectionRequests {
         std::queue<std::string> waiting;
         bool active = false;
+        bool replay_requested = false;
+        // Retained while idle; the last successful ACK allows another query.
+        std::unordered_set<std::uint64_t> replay_in_flight;
     };
 
     struct Completion {
@@ -37,14 +43,20 @@ private:
         // Correlation fields only; request data and tokens remain on the worker.
         Request context;
         std::optional<UserNotification> notification = std::nullopt;
+        std::optional<std::uint64_t> acknowledged_message = std::nullopt;
     };
 
     void start_next(ConnectionId id);
+    void advance(ConnectionId id);
+    void start_replay(ConnectionId id, std::uint64_t user);
+    void complete_replay(ConnectionId id, std::vector<MessageDelivery> deliveries,
+                         std::optional<std::string> error);
     Completion process(ConnectionId id, std::string_view payload, std::optional<Session> session) const;
     void complete(ConnectionId id, Completion result);
 
     TcpServer& server_;
     Handler handler_;
+    ReplayHandler replay_;
     SessionManager sessions_;
     std::unordered_map<ConnectionId, ConnectionRequests> requests_;
     std::size_t max_requests_per_connection_;

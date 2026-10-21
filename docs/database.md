@@ -144,9 +144,10 @@ Field lengths and action-specific validation belong to those services; database
 constraints provide the final consistency check. HTTP registration and login now
 use the user operations. TCP authentication verifies the token's user through
 `user_by_id()`. `send_message` validates recipients and calls `save_direct_message()`
-before returning online notifications. Delivery rows remain unacknowledged,
-including after a successful socket send. Network ACK handling and reconnect
-replay are not implemented yet. See [Messaging](messaging.md).
+before returning online notifications. A successful socket send leaves a delivery
+unacknowledged. TCP `ack_message` records the authenticated recipient's confirmation;
+authentication and completed replay batches trigger bounded queries for remaining
+unacknowledged messages. See [Messaging](messaging.md).
 
 ## Integration Tests
 

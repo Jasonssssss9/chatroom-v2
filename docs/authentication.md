@@ -134,6 +134,11 @@ On success:
 {"type":"response","request_id":"auth-1","action":"authenticate","ok":true,"data":{"user_id":"1"}}
 ```
 
+After binding the session, the server queries unacknowledged deliveries on a
+worker and sends bounded batches of `message` notifications. The client must
+acknowledge each delivery; the console does this automatically while stdin is
+open. See [Messaging](messaging.md#acknowledgments-and-offline-replay).
+
 Invalid, expired, or incorrectly signed tokens and missing users all receive
 `invalid_token` with `Token is invalid or expired`. Token contents are never
 included in responses or server logs. Database failures receive `internal_error`.
@@ -142,7 +147,7 @@ Session rules are deliberately small:
 
 - `ping` and `authenticate` are available before authentication. Every other
   action requires an unexpired session; otherwise it receives
-  `authentication_required`. Authenticated users can use `send_message`;
+  `authentication_required`. Authenticated users can use `send_message` and `ack_message`;
   unimplemented actions receive `unknown_action`.
 - Each user has one online TCP connection. When a new authentication succeeds,
   the Reactor replaces the binding and immediately closes the previous connection

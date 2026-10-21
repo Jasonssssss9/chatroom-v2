@@ -219,6 +219,29 @@ queues are not pool tasks and are discarded during disconnect cleanup. Shutdown
 does not promise delivery of pending responses. A handler that blocks indefinitely
 also prevents its worker from joining; handlers must eventually return.
 
+## Replay Tasks
+
+The Reactor binds a session before scheduling its first pending-message query.
+`RequestHandler::pending_messages()` runs on a worker and returns at most 16
+serialized notifications totaling 128 KiB with frame headers. The dispatcher
+checks these limits on the worker before posting the result to the Reactor.
+The Reactor routes it only to the same connection that requested it.
+A disconnected connection's late replay result is discarded.
+
+A replay query occupies one global and per-connection request slot and is the
+only active task for that connection. Ordinary requests wait behind it. When its
+result arrives, normal request processing resumes without waiting for ACKs;
+the Reactor retains only the batch's IDs. Each successful ACK removes its ID,
+and the last one schedules the next query. Duplicate and unrelated ACKs leave
+the current window unchanged. Idle connection state remains until disconnect,
+so waiting for ACKs needs no worker, timer, or additional queue.
+
+New online sends use the existing routing path during replay. The same persisted
+message can appear in both paths, so clients deduplicate display and acknowledge
+every copy. A query or serialization failure closes only that connection and
+leaves unacknowledged rows available for reconnect. The console coordinates
+terminal requests and automatic ACKs with a send mutex.
+
 ## Verification
 
 The tests use promises and shared futures rather than timing sleeps. A blocked
