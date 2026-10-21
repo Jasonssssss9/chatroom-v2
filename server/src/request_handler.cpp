@@ -108,10 +108,8 @@ RequestResult RequestHandler::send_message(const Request& request, std::uint64_t
     recipients.erase(std::unique(recipients.begin(), recipients.end()), recipients.end());
 
     ChatStore store(database());
-    for (const auto recipient : recipients) {
-        if (!store.user_by_id(recipient)) {
-            return {make_error_response(request, "invalid_recipient", "A recipient does not exist")};
-        }
+    if (store.existing_user_ids(recipients) != recipients) {
+        return {make_error_response(request, "invalid_recipient", "A recipient does not exist")};
     }
     std::uint64_t message;
     try {

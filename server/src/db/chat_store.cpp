@@ -42,6 +42,18 @@ std::optional<User> ChatStore::user_by_id(std::uint64_t id) {
     return read_user(database_.query("SELECT id, username, password_hash FROM users WHERE id = ?", {id}));
 }
 
+std::vector<std::uint64_t> ChatStore::existing_user_ids(const std::vector<std::uint64_t>& ids) {
+    if (ids.empty()) return {};
+    std::string sql = "SELECT id FROM users WHERE id IN (";
+    std::vector<SqlValue> parameters;
+    for (const auto id : ids) {
+        if (!parameters.empty()) sql += ", ";
+        sql += '?';
+        parameters.emplace_back(id);
+    }
+    return read_ids(database_.query(sql + ") ORDER BY id", parameters));
+}
+
 std::uint64_t ChatStore::create_group(std::uint64_t owner, const std::string& name,
                                      const std::vector<std::uint64_t>& members) {
     Transaction transaction(database_);

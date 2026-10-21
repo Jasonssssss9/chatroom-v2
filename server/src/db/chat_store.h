@@ -38,6 +38,8 @@ public:
     std::uint64_t create_user(const std::string& username, const std::string& password_hash);
     std::optional<User> user_by_name(const std::string& username);
     std::optional<User> user_by_id(std::uint64_t id);
+    // Returns matching IDs in ascending order without duplicates.
+    std::vector<std::uint64_t> existing_user_ids(const std::vector<std::uint64_t>& ids);
 
     std::uint64_t create_group(std::uint64_t owner, const std::string& name,
                                const std::vector<std::uint64_t>& members);

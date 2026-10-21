@@ -2,6 +2,7 @@
 #include "http/http_server.h"
 #include "request_dispatcher.h"
 
+#include <algorithm>
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cstring>
@@ -280,6 +281,31 @@ TEST_CASE("Multiple recipients share one message including self and offline user
     CHECK(fixture.store.pending_messages(offline).size() == 1);
     second.send("ping");
     CHECK(second.receive()["data"]["pong"] == true);
+    running.check();
+}
+
+TEST_CASE("A message can target 64 distinct recipients", "[database][tcp][message]") {
+    DatabaseFixture fixture;
+    const auto sender = fixture.store.create_user("sender", "unused-test-hash");
+    std::vector<std::uint64_t> recipients;
+    for (int i = 0; i < 64; ++i) {
+        recipients.push_back(fixture.store.create_user("recipient-" + std::to_string(i),
+                                                      "unused-test-hash"));
+    }
+    std::reverse(recipients.begin(), recipients.end());
+    RunningChat running;
+    Peer peer(running.server.port());
+    authenticate(peer, running, sender);
+    peer.send("send_message", message_data("multi-64", recipients, "Hello everyone"));
+    const auto response = peer.receive();
+    REQUIRE(response["ok"] == true);
+    CHECK(fixture.count("messages") == 1);
+    CHECK(fixture.count("message_deliveries") == 64);
+    for (const auto recipient : recipients) {
+        const auto pending = fixture.store.pending_messages(recipient);
+        REQUIRE(pending.size() == 1);
+        CHECK(std::to_string(pending[0].id) == response["data"]["message_id"]);
+    }
     running.check();
 }
 

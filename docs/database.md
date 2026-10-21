@@ -102,6 +102,12 @@ nested. Store methods that write multiple tables already own their transaction.
 provides validation, hashing, and verification. Missing users return
 `std::nullopt`; a duplicate username raises MySQL error 1062.
 
+`existing_user_ids()` selects only IDs using one prepared `SELECT ... IN (...)`
+query, with a placeholder for each supplied ID. It returns the matching IDs in
+ascending order without duplicates; an empty input returns an empty result.
+`send_message` compares this result with its sorted, deduplicated recipients
+before saving. Foreign keys remain the final consistency check.
+
 `create_group()` inserts the group and members atomically, always including the
 owner. Repeated member IDs are collapsed. `save_group_message()` requires the
 sender to be a member and locks a membership snapshot. Every other member gets a

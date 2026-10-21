@@ -40,6 +40,20 @@ TEST_CASE("Users have unique case-sensitive names and literal SQL parameters", "
           fixture.store.create_user("alice", "test-hash"));
 }
 
+TEST_CASE("User ID lookup returns only existing IDs in sorted order", "[database]") {
+    DatabaseFixture fixture;
+    const auto alice = fixture.store.create_user("alice", "test-hash");
+    const auto bob = fixture.store.create_user("bob", "test-hash");
+    const auto missing = std::numeric_limits<std::uint64_t>::max();
+    CHECK(fixture.store.existing_user_ids({}).empty());
+    CHECK(fixture.store.existing_user_ids({alice}) == std::vector<std::uint64_t>{alice});
+    CHECK(fixture.store.existing_user_ids({bob, alice, bob}) ==
+          std::vector<std::uint64_t>{alice, bob});
+    CHECK(fixture.store.existing_user_ids({missing, bob, alice}) ==
+          std::vector<std::uint64_t>{alice, bob});
+    CHECK(fixture.store.existing_user_ids({missing}).empty());
+}
+
 TEST_CASE("Transactions commit explicitly and roll back on exceptions", "[database]") {
     DatabaseFixture fixture;
     try {
