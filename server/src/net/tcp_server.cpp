@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <stdexcept>
 #include <sys/eventfd.h>
+#include <sys/signalfd.h>
 #include <sys/socket.h>
 #include <system_error>
 #include <utility>
@@ -14,6 +15,7 @@ namespace chatroom {
 namespace {
 constexpr std::uint64_t kListener = 0;
 constexpr std::uint64_t kWakeup = 1;
+constexpr std::uint64_t kShutdownSignal = 2;
 constexpr auto kAcceptRetryDelay = std::chrono::milliseconds(200);
 
 bool retry_accept_error(int error) {
@@ -279,9 +281,12 @@ void TcpServer::close_connection(ConnectionId id, std::string_view reason) {
     }
 }
 
-void TcpServer::run() {
+void TcpServer::run(int shutdown_signal_fd) {
     std::array<epoll_event, 64> events;
     try {
+        if (shutdown_signal_fd >= 0) {
+            epoll_.add(shutdown_signal_fd, kShutdownSignal, EPOLLIN);
+        }
         while (!stopped_) {
             if (accept_retry_at_ && std::chrono::steady_clock::now() >= *accept_retry_at_) {
                 epoll_.add(listener_.fd(), kListener, EPOLLIN | EPOLLET);
@@ -314,6 +319,19 @@ void TcpServer::run() {
                     if (!stopped_) {
                         process_sends();
                     }
+                } else if (id == kShutdownSignal) {
+                    signalfd_siginfo signal{};
+                    ssize_t result;
+                    do {
+                        result = ::read(shutdown_signal_fd, &signal, sizeof(signal));
+                    } while (result < 0 && errno == EINTR);
+                    if (result < 0 && errno == EAGAIN) continue;
+                    if (result != static_cast<ssize_t>(sizeof(signal))) {
+                        throw std::system_error(result < 0 ? errno : EIO,
+                                                std::generic_category(), "read(signalfd)");
+                    }
+                    log(LogLevel::info, "shutdown_requested", {{"signal", signal.ssi_signo}});
+                    stop();
                 } else {
                     try {
                         handle_event(id, events[i].events);

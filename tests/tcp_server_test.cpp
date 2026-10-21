@@ -17,8 +17,10 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <pthread.h>
 #include <sstream>
 #include <sys/resource.h>
+#include <sys/signalfd.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <system_error>
@@ -267,7 +269,77 @@ void run_resource_limited_server() {
     server.run();
     log(LogLevel::info, "test_server_stopped");
 }
+
+void run_signal_server(int control) {
+    sigset_t signals;
+    ::sigemptyset(&signals);
+    ::sigaddset(&signals, SIGINT);
+    ::sigaddset(&signals, SIGTERM);
+    const int error = ::pthread_sigmask(SIG_BLOCK, &signals, nullptr);
+    if (error != 0) throw std::system_error(error, std::generic_category(), "pthread_sigmask");
+    UniqueFd signal_fd(::signalfd(-1, &signals, SFD_NONBLOCK | SFD_CLOEXEC));
+    if (signal_fd.get() < 0) throw std::system_error(errno, std::generic_category(), "signalfd");
+    TcpServer server(0);
+    {
+        RequestDispatcher dispatcher(server,
+            [control](ConnectionId, const Request& request, std::optional<Session>) {
+                log(LogLevel::info, "test_worker_started");
+                char byte;
+                ssize_t count;
+                do { count = ::read(control, &byte, 1); } while (count < 0 && errno == EINTR);
+                if (count != 1) throw std::runtime_error("Expected the worker release byte");
+                log(LogLevel::info, "test_worker_finished");
+                return RequestResult{make_response(request)};
+            }, 1);
+        server.set_message_handler([&](ConnectionId id, std::string payload) {
+            dispatcher.enqueue(id, std::move(payload));
+        });
+        server.set_disconnect_handler([&](ConnectionId id) { dispatcher.disconnect(id); });
+        log(LogLevel::info, "test_server_ready", {{"port", server.port()}});
+        server.run(signal_fd.get());
+    }
+    log(LogLevel::info, "test_server_stopped");
+}
 } // namespace
+
+TEST_CASE("Shutdown signals stop the Reactor and wait for submitted work", "[server][shutdown]") {
+    int signal_number = SIGINT;
+    SECTION("SIGINT") { signal_number = SIGINT; }
+    SECTION("SIGTERM") { signal_number = SIGTERM; }
+    int pair[2];
+    REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pair) == 0);
+    UniqueFd reader(pair[0]);
+    UniqueFd writer(pair[1]);
+    const timeval timeout{3, 0};
+    REQUIRE(::setsockopt(reader.get(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0);
+    const pid_t pid = ::fork();
+    REQUIRE(pid >= 0);
+    if (pid == 0) {
+        reader.reset();
+        if (::dup2(writer.get(), STDERR_FILENO) < 0) ::_exit(1);
+        try { run_signal_server(writer.get()); }
+        catch (...) { ::_exit(1); }
+        ::_exit(0);
+    }
+    ChildProcess child(pid);
+    writer.reset();
+    const auto ready = await_log(reader.get(), "test_server_ready");
+    auto client = connect_client(ready.at("context").at("port").get<std::uint16_t>());
+    send_all(client.get(), encode_frame(R"({"type":"request","request_id":"r1","action":"slow"})"));
+    await_log(reader.get(), "test_worker_started");
+    REQUIRE(::kill(pid, signal_number) == 0);
+    const auto shutdown = await_log(reader.get(), "shutdown_requested");
+    CHECK(shutdown.at("context").at("signal") == signal_number);
+    expect_closed(client.get());
+    // A second signal must not interrupt cleanup while the worker is still blocked.
+    REQUIRE(::kill(pid, signal_number) == 0);
+    send_all(reader.get(), "x");
+    await_log(reader.get(), "test_worker_finished");
+    await_log(reader.get(), "test_server_stopped");
+    const int status = child.wait();
+    REQUIRE(WIFEXITED(status));
+    CHECK(WEXITSTATUS(status) == 0);
+}
 
 TEST_CASE("Connection limits preserve active clients and allow later connections", "[server]") {
     std::promise<void> disconnected;

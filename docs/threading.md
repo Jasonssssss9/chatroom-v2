@@ -198,6 +198,12 @@ Construct the server before the dispatcher, install its message and disconnect
 callbacks, then call `run()`. When using a separate Reactor thread, stop and join
 that thread before destroying the dispatcher.
 
+The executable blocks SIGINT and SIGTERM before workers start and passes a
+`signalfd` to the Reactor. Receiving either signal calls `stop()` from the event
+loop, following the same cleanup path as an ordinary stop request. HTTP is stopped
+and joined after the Reactor returns; the dispatcher is then destroyed. The final
+`server_stopped` log is emitted only after all HTTP and TCP workers have joined.
+
 Shutdown proceeds as follows:
 
 1. `stop()` wakes the Reactor and stops network processing.

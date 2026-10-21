@@ -124,8 +124,18 @@ Call `stop()` from a normal thread to wake the loop and stop it. Shutdown closes
 active connections and does not drain pending output. Run each server instance
 once. Pending callbacks are discarded, and later `send()` and `post()` calls are
 ignored. Join the loop and worker threads before destroying the server.
-`stop()` is not a signal-handler API; the server executable currently uses normal
-process termination for Ctrl+C.
+
+The executable blocks SIGINT and SIGTERM before creating workers, which inherit
+the signal mask. A non-blocking, close-on-exec `signalfd` turns these signals into
+an epoll event passed to `run()`. The Reactor logs `shutdown_requested` and calls
+`stop()` on its own thread. No asynchronous signal handler calls application code.
+The mask stays blocked through teardown, so another signal does not interrupt
+cleanup. After the Reactor closes connections, the executable stops and joins
+the HTTP service, then destroys the dispatcher and waits for submitted TCP tasks.
+Requests still waiting in per-connection queues are discarded. `server_stopped`
+is logged after all workers have joined, and the process exits successfully.
+Queued responses and notifications are not drained during shutdown; persisted
+deliveries remain available for later acknowledgment or replay.
 
 ## Client Networking
 

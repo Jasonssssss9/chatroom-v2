@@ -28,7 +28,9 @@ public:
     void set_disconnect_handler(DisconnectHandler handler);
     std::uint16_t port() const { return listener_.local_port(); }
 
-    void run();
+    // An optional non-blocking signalfd requests shutdown on the Reactor thread.
+    // The caller owns it and must block its signals before starting workers.
+    void run(int shutdown_signal_fd = -1);
 
     // Queues a framed payload for the loop. Results for closed connections are discarded.
     void send(ConnectionId id, std::string_view payload);
@@ -69,7 +71,7 @@ private:
     std::size_t max_connections_;
     // The listener is removed from epoll while a resource-exhaustion retry is pending.
     std::optional<std::chrono::steady_clock::time_point> accept_retry_at_;
-    ConnectionId next_id_ = 2;
+    ConnectionId next_id_ = 3;
     MessageHandler on_message_;
     DisconnectHandler on_disconnect_;
 
