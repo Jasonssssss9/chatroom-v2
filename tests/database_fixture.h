@@ -28,7 +28,7 @@ struct DatabaseFixture {
                 database.execute(statement);
             }
         }
-        for (const auto* table : {"file_recipients", "files", "message_deliveries", "messages",
+        for (const auto* table : {"message_deliveries", "messages", "file_recipients", "files",
                                   "group_members", "chat_groups", "users"}) {
             database.execute(std::string("DELETE FROM ") + table);
         }

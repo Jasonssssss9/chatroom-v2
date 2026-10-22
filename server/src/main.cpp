@@ -84,7 +84,12 @@ int main(int argc, char* argv[]) {
                 dispatcher.enqueue(id, std::move(payload));
             });
             server.set_disconnect_handler([&](chatroom::ConnectionId id) { dispatcher.disconnect(id); });
-            chatroom::HttpServer http(auth, config.database, config.address, config.http);
+            chatroom::HttpServer http(auth, config.database, config.address, config.http, config.files,
+                [&server, &dispatcher](chatroom::UserNotification notification) {
+                    server.post([&dispatcher, notification = std::move(notification)] {
+                        dispatcher.notify(notification);
+                    });
+                });
             http.start([&server] { server.stop(); });
             chatroom::log(chatroom::LogLevel::info, "server_started",
                           {{"address", config.address}, {"port", server.port()},

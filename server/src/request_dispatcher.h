@@ -25,6 +25,8 @@ public:
     // Called by the Reactor's message and disconnect callbacks.
     void enqueue(ConnectionId id, std::string payload);
     void disconnect(ConnectionId id);
+    // Reactor-only routing, also used by HTTP upload completions.
+    void notify(const UserNotification& notification);
     // Reactor-only access for online routing.
     const SessionManager& sessions() const { return sessions_; }
 

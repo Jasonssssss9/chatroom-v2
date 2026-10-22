@@ -172,15 +172,17 @@ void RequestDispatcher::complete(ConnectionId id, Completion result) {
         }
     }
     // A committed message remains deliverable even if its sender disconnected.
-    if (result.notification) {
-        for (const auto recipient : result.notification->recipients) {
-            if (const auto connection = sessions_.connection_for(recipient)) {
-                server_.send(*connection, result.notification->payload);
-            }
-        }
-    }
+    if (result.notification) notify(*result.notification);
     if (it == requests_.end()) return;
     advance(id);
+}
+
+void RequestDispatcher::notify(const UserNotification& notification) {
+    for (const auto recipient : notification.recipients) {
+        if (const auto connection = sessions_.connection_for(recipient)) {
+            server_.send(*connection, notification.payload);
+        }
+    }
 }
 
 void RequestDispatcher::advance(ConnectionId id) {

@@ -77,6 +77,21 @@ TEST_CASE("The server starts with useful defaults and no credentials", "[config]
     CHECK(config.http.port == 8080);
     CHECK(config.http.worker_threads == 4);
     CHECK(config.token_lifetime_seconds == 3600);
+    CHECK(config.files.directory == "data/files");
+    CHECK(config.files.max_size_bytes == 10485760);
+}
+
+TEST_CASE("File storage settings have explicit size and directory limits", "[config][file]") {
+    TestEnvironment environment;
+    ConfigFile file(R"({"files":{"directory":"/tmp/chatroom-files","max_size_bytes":65536}})");
+    const auto config = load_config({"--config", file.path});
+    CHECK(config.files.directory == "/tmp/chatroom-files");
+    CHECK(config.files.max_size_bytes == 65536);
+    for (const auto* contents : {R"({"files":{"directory":""}})", R"({"files":{"max_size_bytes":0}})",
+                                 R"({"files":{"max_size_bytes":1073741825}})", R"({"files":{"max_size_bytes":"100"}})"}) {
+        ConfigFile invalid(contents);
+        CHECK_THROWS_AS(load_config({"--config", invalid.path}), std::invalid_argument);
+    }
 }
 
 TEST_CASE("HTTP and JWT settings use JSON values and CLI overrides", "[config]") {

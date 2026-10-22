@@ -173,7 +173,7 @@ local control. Normal
 output formats messages and errors; `--json` retains raw payload display.
 See [Command-Line Client](client.md) for syntax and examples.
 
-The receiver recognizes `message` notifications, suppresses recent duplicate IDs,
+The receiver recognizes `message` and `file_available` notifications, suppresses recent duplicate IDs,
 and sends `ack_message` after display. It acknowledges duplicate copies too. A
 send mutex serializes automatic ACKs with terminal requests and the EOF half-close;
 the underlying `TcpClient` still requires one sender at a time. The receive thread

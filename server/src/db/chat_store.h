@@ -10,15 +10,6 @@ struct User {
     std::string password_hash;
 };
 
-struct Message {
-    std::uint64_t id;
-    std::uint64_t sender_id;
-    std::string client_message_id;
-    std::optional<std::uint64_t> group_id;
-    std::string text;
-    std::string created_at;
-};
-
 struct SavedGroupMessage {
     std::uint64_t id;
     std::vector<std::uint64_t> recipients;
@@ -31,6 +22,21 @@ struct FileInfo {
     std::string original_name;
     std::string content_type;
     std::uint64_t size_bytes;
+};
+
+struct Message {
+    std::uint64_t id;
+    std::uint64_t sender_id;
+    std::string client_message_id;
+    std::optional<std::uint64_t> group_id;
+    std::string text;
+    std::string created_at;
+    std::optional<FileInfo> file = std::nullopt;
+};
+
+struct SavedFile {
+    std::uint64_t id;
+    std::uint64_t message_id;
 };
 
 // Concrete chat persistence on a caller-owned connection. Use on a worker thread.
@@ -63,7 +69,8 @@ public:
     // Repeated acknowledgments succeed; users cannot acknowledge another user's delivery.
     bool acknowledge_message(std::uint64_t recipient, std::uint64_t message);
 
-    std::uint64_t create_file(std::uint64_t owner, const std::string& storage_key,
+    // Saves metadata, access permissions, and the ACK-able notification atomically.
+    SavedFile create_file(std::uint64_t owner, const std::string& storage_key,
                               const std::string& original_name, const std::string& content_type,
                               std::uint64_t size, const std::vector<std::uint64_t>& recipients);
     std::optional<FileInfo> file_for_user(std::uint64_t file, std::uint64_t user);

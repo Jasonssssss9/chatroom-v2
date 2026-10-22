@@ -219,7 +219,8 @@ std::vector<MessageDelivery> RequestHandler::pending_messages(std::uint64_t reci
                 {"sender_id", std::to_string(message.sender_id)},
                 {"client_message_id", message.client_message_id}, {"text", message.text}};
             if (message.group_id) data["group_id"] = std::to_string(*message.group_id);
-            auto payload = make_notification("message", std::move(data)).dump();
+            auto payload = message.file ? make_file_notification(message.id, *message.file).dump()
+                                        : make_notification("message", std::move(data)).dump();
             if (payload.size() > kMaxFrameSize) {
                 throw std::length_error("Stored message exceeds the 64 KiB frame limit");
             }

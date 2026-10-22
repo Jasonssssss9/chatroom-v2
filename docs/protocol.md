@@ -13,14 +13,13 @@ The server currently supports:
 - JWT authentication with `authenticate` and Reactor-owned user sessions.
 - Persisted private and multi-recipient messages with online notifications.
 - Consistent errors for malformed JSON, invalid requests, and unsupported actions.
-- Server-initiated `message` and `group_created` notifications.
+- Server-initiated `message`, `group_created`, and `file_available` notifications.
 - Recipient acknowledgments and bounded replay after authentication.
 - Group creation, member queries, and persisted group broadcasts.
 
 The implemented actions are `ping`, `authenticate`, `send_message`, `ack_message`,
 `create_group`, `get_group_members`, and `send_group_message`.
-File transfers are not implemented yet.
-They do not return success placeholders.
+HTTP file transfers are implemented separately from TCP frames. See [File Transfers](files.md).
 
 ## 2. Framing
 
@@ -359,7 +358,7 @@ recipient fields are ignored. See [Group Chat](groups.md) for detailed behavior.
 
 ### ack_message
 
-After accepting a `message` notification, acknowledge its persisted ID:
+After accepting a `message` or `file_available` notification, acknowledge its persisted message ID:
 
 ```json
 {"type":"request","request_id":"ack-105","action":"ack_message","data":{"message_id":"105"}}
@@ -448,7 +447,8 @@ features while assigning readable operation names and the appropriate transport.
 HTTP registration, login, TCP authentication, and direct or multi-recipient sends
 are implemented. See [Authentication](authentication.md) and [Messaging](messaging.md).
 Group creation, member queries, and group messages are also implemented.
-Logout and file transfers remain planned. See [Group Chat](groups.md).
+HTTP file upload/download and persisted file notifications are implemented.
+Logout remains planned. See [Group Chat](groups.md) and [File Transfers](files.md).
 
 | v1 operation | v2 operation | Transport |
 | --- | --- | --- |
@@ -477,7 +477,8 @@ The action data is intentionally small:
 The remaining payload fields will be implemented and validated with their business services.
 The server obtains the sender from the authenticated connection, not a
 client-supplied sender field. IDs are represented as strings in the protocol.
-File bytes will travel over HTTP; TCP notifications will reference the file ID.
+File bytes travel over HTTP; TCP `file_available` notifications contain a file ID
+and a separate message ID for ACKs. ACK confirms the notification, not the download.
 
 The three message-related IDs have different jobs:
 

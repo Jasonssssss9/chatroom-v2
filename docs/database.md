@@ -60,15 +60,30 @@ storage keys use a case-sensitive binary collation. Connections use UTC timestam
 | `users` | Unique usernames and password hashes |
 | `chat_groups` | Group name and owner |
 | `group_members` | Membership, including the owner |
-| `messages` | Sender, client message ID, optional group, text, and creation time |
+| `messages` | Sender, optional client message ID, optional group or file, text, and creation time |
 | `message_deliveries` | Recipient and acknowledgment time for each message |
 | `files` | Owner, storage key, original name, MIME type, and byte size |
 | `file_recipients` | File access for selected users in addition to the owner |
 
-Foreign keys reject missing users and groups. File contents remain on disk. The
-future upload service generates storage keys; they are not client-supplied paths.
+Foreign keys reject missing users, groups, and files. File contents remain on disk.
+The upload service generates storage keys; they are not client-supplied paths.
 Online connection state belongs to the Reactor rather than a persisted boolean
 that could become stale after a crash.
+
+## Upgrading an Existing Database
+
+Databases created before file transfers need the additive migration below.
+Apply it once, before starting the updated server. It preserves existing messages:
+
+```bash
+mysql --host=127.0.0.1 --user=chatroom --password chatroom < sql/migrations/001_file_messages.sql
+mysql --host=127.0.0.1 --user=chatroom --password chatroom_test < sql/migrations/001_file_messages.sql
+```
+
+The migration adds `messages.file_id` and its foreign key and allows NULL client
+message IDs for server-created file notifications. New databases import the current
+`sql/schema.sql` instead. `CREATE TABLE IF NOT EXISTS` does not upgrade existing
+tables; importing the schema again is not a substitute for this migration.
 
 ## Connections and Queries
 
@@ -140,9 +155,12 @@ acknowledgments succeed without changing the original timestamp. Another user's
 delivery cannot be acknowledged. Retaining acknowledged records prevents sender
 retries from recreating deliveries.
 
-`create_file()` saves metadata and allowed recipients atomically.
+`create_file()` saves metadata, allowed recipients, and a message with its delivery
+rows atomically. It returns the file ID and notification message ID.
 `file_for_user()` returns metadata only to the owner or a selected recipient.
-Upload/download I/O and file notifications remain service work.
+`pending_messages()` joins file metadata in the same query, so file notifications
+participate in ACKs and bounded replay without one extra lookup per file.
+HTTP handles disk I/O and posts online notifications after commit. See [File Transfers](files.md).
 
 Field lengths and action-specific validation belong to those services; database
 constraints provide the final consistency check. HTTP registration and login now

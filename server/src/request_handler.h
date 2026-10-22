@@ -3,18 +3,13 @@
 #include "protocol.h"
 #include "auth/token_service.h"
 #include "config.h"
+#include "notification.h"
 
 #include <vector>
 
 namespace chatroom {
 
 class Database;
-
-// One serialized notification, routed to users by the Reactor after persistence.
-struct UserNotification {
-    std::vector<std::uint64_t> recipients;
-    std::string payload;
-};
 
 inline constexpr std::size_t kReplayBatchCount = 16;
 inline constexpr std::size_t kReplayBatchBytes = 128 * 1024;

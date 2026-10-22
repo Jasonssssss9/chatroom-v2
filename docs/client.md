@@ -29,6 +29,8 @@ credentials or JWT signing secret.
 | `/create_group <name> [id,...]` | Create a group containing yourself and selected users |
 | `/members <group-id>` | Query the members of a group you belong to |
 | `/send_group <group-id> <text>` | Send a message to every other member |
+| `/upload <id[,id...]> <path>` | Upload a file for selected users |
+| `/download <file-id> <path>` | Download to a new local file; existing files are preserved |
 | `/ping` | Check the TCP connection |
 | `/help` | List commands |
 | `/quit` | Disconnect and exit |
@@ -95,10 +97,23 @@ limit and are displayed with both group and message IDs. Online members receive
 a group creation notice. See [Group Chat](groups.md) for a complete walkthrough,
 permission checks, and retry behavior.
 
+For files, wait for TCP login to succeed, then use:
+
+```text
+/upload 2,3 "./notes final.pdf"
+/download 42 "./received notes.pdf"
+```
+
+Use the returned file ID and choose a new destination whose parent exists.
+File notices are deduplicated and acknowledged automatically; ACK confirms the
+notice, not a completed download. Transfers stream bytes on the input thread,
+while the receiver continues chat and ACKs. File requests use five-second connect,
+30-second read/write, and 120-second total timeouts. See [File Transfers](files.md).
+
 ## Messages, Errors, and Reconnection
 
 The receiver continues processing messages and automatic ACKs during HTTP
-registration or login. TCP writes are serialized with terminal requests.
+registration, login, or file transfers. TCP writes are serialized with terminal requests.
 Successful automatic ACK responses are hidden in normal output; failures remain
 visible. Recent duplicate messages are displayed once but acknowledged every
 time. The history holds the most recent 1024 distinct IDs in memory.
@@ -111,7 +126,7 @@ Error: invalid_credentials: Invalid username or password
 ```
 
 Command syntax errors and HTTP failures leave the TCP connection available for
-later commands. HTTP has five-second connection/read/write timeouts and a
+later commands. Authentication HTTP has five-second connection/read/write timeouts and a
 ten-second total request limit. Unexpected TCP failures end the client.
 Message text and errors escape control characters so a newline or escape byte
 cannot overwrite terminal output. UTF-8 text remains readable.

@@ -88,5 +88,9 @@ the session user's delivery. After binding a session, the Reactor schedules
 bounded replay on workers and waits for a batch's ACKs before fetching more.
 Group creation, member queries, and group messages are implemented. Group sends
 check membership and retain their original recipient snapshot across retries.
-Group and private messages share ACKs, replay, and online routing. File transfers
-remain planned. See [Messaging](messaging.md) and [Group Chat](groups.md).
+Group and private messages share ACKs, replay, and online routing.
+HTTP uploads and downloads stream file bytes on HTTP workers. File metadata,
+permissions, and the file notification's message and deliveries commit together;
+the Reactor routes the resulting `file_available` notice. Files use the same ACK
+and replay pipeline as text. See [Messaging](messaging.md), [Group Chat](groups.md),
+and [File Transfers](files.md).

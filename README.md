@@ -4,7 +4,7 @@ A chat server and command-line client for Linux, written in C++17.
 
 The server uses non-blocking TCP, epoll, and the Reactor pattern for real-time
 chat, HTTP and JWT for authentication, and MySQL for users, groups, and messages.
-File storage is planned on disk, with metadata in MySQL.
+Files are stored on disk, with metadata and download permissions in MySQL.
 
 The server and client network layers are implemented. The server accepts JSON
 requests for ping, authentication, private and group chat, member queries, and
@@ -21,7 +21,8 @@ and JWT issuance are implemented. TCP verifies JWTs and binds users to connectio
 with one online connection per user. Private messages and multi-recipient sends
 are persisted before online notifications. Clients acknowledge deliveries, and
 authentication triggers bounded replay of unacknowledged messages. Groups support
-creation, member queries, and persisted broadcast. File transfers are still planned.
+creation, member queries, and persisted broadcast. HTTP file uploads and downloads
+are streamed, with authenticated access and ACK-able online and offline notifications.
 
 ## Project Layout
 
@@ -32,7 +33,7 @@ server/
 client/
     CMakeLists.txt   Client build configuration
     src/            Command-line client source code
-common/             JSON protocol, message framing, logging, and file descriptor ownership
+common/             Protocol, framing, logging, and small resource utilities
 tests/              Catch2 tests
 cmake/              Shared third-party dependency configuration
 config/             Example configuration files
@@ -55,6 +56,8 @@ See [Messaging](docs/messaging.md) to chat between two command-line clients and
 understand persistence, retries, and online delivery.
 See [Command-Line Client](docs/client.md) for commands and display options.
 See [Group Chat](docs/groups.md) for group commands, permissions, and delivery snapshots.
+See [File Transfers](docs/files.md) for storage configuration, schema migration,
+HTTP endpoints, console commands, and notification delivery.
 
 ## Building
 
@@ -75,15 +78,15 @@ The build provides these targets:
 
 | Target | Configuration | Description |
 | --- | --- | --- |
-| `chatroom_common` | `common/CMakeLists.txt` | Shared framing, JSON protocol, and logging library |
+| `chatroom_common` | `common/CMakeLists.txt` | Shared protocol, framing, logging, and resource utilities |
 | `chatroom_net` | `server/CMakeLists.txt` | Server network library |
 | `chatroom_app` | `server/CMakeLists.txt` | Configuration, sessions, request dispatcher, handlers, and worker pool |
 | `chatroom_db` | `server/CMakeLists.txt` | MySQL connections, transactions, and chat persistence |
 | `chatroom_auth` | `server/CMakeLists.txt` | Password hashing, registration, login, and JWT issuance and verification |
-| `chatroom_http` | `server/CMakeLists.txt` | HTTP authentication listener and request logging |
+| `chatroom_http` | `server/CMakeLists.txt` | HTTP authentication, file transfers, and request logging |
 | `chatroom_server` | `server/CMakeLists.txt` | TCP chat and HTTP authentication server |
 | `chatroom_client_net` | `client/CMakeLists.txt` | Blocking TCP client library |
-| `chatroom_client_app` | `client/CMakeLists.txt` | HTTP authentication and console commands |
+| `chatroom_client_app` | `client/CMakeLists.txt` | HTTP authentication, streamed file transfers, and console commands |
 | `chatroom_client` | `client/CMakeLists.txt` | Command-line chat client |
 | `chatroom_tests` | `tests/CMakeLists.txt` | Catch2 tests, automatically registered with CTest |
 | `chatroom_database_tests` | `tests/CMakeLists.txt` | Optional MySQL and HTTP integration tests (`BUILD_DATABASE_TESTS=ON`) |
@@ -187,6 +190,8 @@ needed: `chatroom_client 127.0.0.1 8081 8080`.
 /create_group "Study group" 2,3
 /members 42
 /send_group 42 Hello group
+/upload 2 "./notes final.pdf"
+/download 42 "./received notes.pdf"
 /ping
 /help
 ```

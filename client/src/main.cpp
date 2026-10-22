@@ -38,8 +38,9 @@ int main(int argc, char* argv[]) {
         const auto http_port = arguments.size() >= 3 ? parse_port(arguments[2]) : std::uint16_t{8080};
         chatroom::TcpClient client(address, port);
         chatroom::AuthClient auth(address, http_port);
+        chatroom::FileClient files(address, http_port);
         std::cout << "Connected to " << address << ':' << port << '\n';
-        chatroom::ConsoleClient console(client, auth, json_output);
+        chatroom::ConsoleClient console(client, auth, files, json_output);
         console.run();
     } catch (const std::exception& error) {
         std::cerr << "Client error: " << error.what() << '\n';

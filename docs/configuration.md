@@ -47,6 +47,8 @@ fields are ignored. The root and each supplied section must be JSON objects.
 | `http.port` | `8080` | HTTP port, from 0 to 65535; uses `server.address` |
 | `http.worker_threads` | `4` | Positive fixed HTTP worker count |
 | `jwt.token_lifetime_seconds` | `3600` | JWT lifetime, from 1 to 86400 seconds |
+| `files.directory` | `data/files` | Non-empty disk directory; relative to the server working directory |
+| `files.max_size_bytes` | `10485760` | Maximum upload size, from 1 byte to 1 GiB; empty files are allowed |
 | `log.level` | `info` | Minimum severity: `debug`, `info`, `warn`, or `error` |
 
 All ports, worker counts, the JWT lifetime, and capacity limits must be JSON
@@ -136,6 +138,7 @@ millisecond precision.
 | `database_connected` | `info` | Database host, port, and name after the startup connectivity check |
 | `http_request` | `info` or `error` | Client IP, method, URI path, status, and response error details |
 | `http_database_error` | `error` | Numeric MySQL error code without SQL values |
+| `http_request_failed` | `error` | Unexpected HTTP handler failure, including disk I/O errors |
 | `server_started` | `info` | Actual port, worker count, and capacity limits after successful setup |
 | `server_failed` | `error` | Startup or runtime phase and exception details |
 | `server_stopped` | `info` | The event loop returned normally |
@@ -173,8 +176,8 @@ To save logs, use normal shell redirection:
 
 The logger is deliberately synchronous and has no background thread, file rotation,
 or extra logging dependency. Redirect logs or use the process manager to collect
-them. Normal Ctrl+C termination still uses the operating system's default behavior,
-so it does not emit `server_stopped`; that event describes a normal `run()` return.
+them. SIGINT and SIGTERM reach the Reactor through `signalfd`; normal shutdown
+emits `server_stopped` after the HTTP and TCP workers have joined.
 
 ## Tests
 

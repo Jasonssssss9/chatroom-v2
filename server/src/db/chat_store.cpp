@@ -16,7 +16,7 @@ std::optional<User> read_user(const std::vector<SqlRow>& rows) {
 }
 
 Message read_message(const SqlRow& row) {
-    return {number(row[0]), number(row[1]), row[2].value(),
+    return {number(row[0]), number(row[1]), row[2].value_or(""),
             row[3] ? std::optional<std::uint64_t>(number(row[3])) : std::nullopt,
             row[4].value(), row[5].value()};
 }
@@ -85,10 +85,10 @@ std::uint64_t ChatStore::insert_message(std::uint64_t sender, const std::string&
     if (result.affected_rows != 1) {
         // The upsert locks the existing row; this read also avoids an older snapshot.
         const auto rows = database_.query(
-            "SELECT id, sender_id, client_message_id, group_id, text, created_at FROM messages "
+            "SELECT id, sender_id, client_message_id, group_id, text, created_at, file_id FROM messages "
             "WHERE id = ? FOR UPDATE", {id});
         const auto existing = read_message(rows.at(0));
-        if (existing.group_id != group || existing.text != text) {
+        if (rows.at(0)[6] || existing.group_id != group || existing.text != text) {
             throw std::invalid_argument("Client message ID belongs to a different message");
         }
         if (!group) {
@@ -138,12 +138,19 @@ std::optional<SavedGroupMessage> ChatStore::save_group_message(std::uint64_t sen
 
 std::vector<Message> ChatStore::pending_messages(std::uint64_t recipient, std::uint64_t limit) {
     const auto rows = database_.query(
-        "SELECT m.id, m.sender_id, m.client_message_id, m.group_id, m.text, m.created_at "
+        "SELECT m.id, m.sender_id, m.client_message_id, m.group_id, m.text, m.created_at, "
+        "f.id, f.owner_id, f.storage_key, f.original_name, f.content_type, f.size_bytes "
         "FROM message_deliveries AS d JOIN messages AS m ON m.id = d.message_id "
+        "LEFT JOIN files AS f ON f.id = m.file_id "
         "WHERE d.recipient_id = ? AND d.acknowledged_at IS NULL "
         "ORDER BY m.id LIMIT ?", {recipient, limit});
     std::vector<Message> messages;
-    for (const auto& row : rows) messages.push_back(read_message(row));
+    for (const auto& row : rows) {
+        auto message = read_message(row);
+        if (row[6]) message.file = FileInfo{number(row[6]), number(row[7]), row[8].value(),
+                                           row[9].value(), row[10].value(), number(row[11])};
+        messages.push_back(std::move(message));
+    }
     return messages;
 }
 
@@ -156,7 +163,7 @@ bool ChatStore::acknowledge_message(std::uint64_t recipient, std::uint64_t messa
         {message, recipient}).empty();
 }
 
-std::uint64_t ChatStore::create_file(std::uint64_t owner, const std::string& storage_key,
+SavedFile ChatStore::create_file(std::uint64_t owner, const std::string& storage_key,
                                     const std::string& original_name, const std::string& content_type,
                                     std::uint64_t size, const std::vector<std::uint64_t>& recipients) {
     Transaction transaction(database_);
@@ -167,8 +174,14 @@ std::uint64_t ChatStore::create_file(std::uint64_t owner, const std::string& sto
     for (const auto recipient : unique) {
         database_.execute("INSERT INTO file_recipients (file_id, user_id) VALUES (?, ?)", {id, recipient});
     }
+    const auto message = database_.execute(
+        "INSERT INTO messages (sender_id, text, file_id) VALUES (?, '', ?)", {owner, id}).insert_id;
+    for (const auto recipient : unique) {
+        database_.execute("INSERT INTO message_deliveries (message_id, recipient_id) VALUES (?, ?)",
+                           {message, recipient});
+    }
     transaction.commit();
-    return id;
+    return {id, message};
 }
 
 std::optional<FileInfo> ChatStore::file_for_user(std::uint64_t file, std::uint64_t user) {

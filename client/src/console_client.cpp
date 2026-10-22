@@ -23,10 +23,12 @@ const char* kHelp = "Commands:\n"
     "  /create_group <name> [id,...]    Create a group, including yourself\n"
     "  /members <group-id>             List the group's members\n"
     "  /send_group <group-id> <text>    Send a group message\n"
+    "  /upload <id[,id...]> <path>      Upload a file for selected users\n"
+    "  /download <file-id> <path>       Save a file to a new local path\n"
     "  /ping                           Check the TCP connection\n"
     "  /help                           Show these commands\n"
     "  /quit                           Disconnect\n"
-    "Quote credentials or group names that contain spaces. JSON requests are also accepted.\n";
+    "Quote credentials, group names, or paths containing spaces. JSON requests are also accepted.\n";
 
 bool valid_id(std::string_view text) {
     std::uint64_t id = 0;
@@ -91,6 +93,12 @@ std::string format_message(const nlohmann::json& message) {
         return "Added to group " + visible(field(*data, "group_id")) + ": " +
                visible(field(*data, "name")) + " (owner " + visible(field(*data, "owner_id")) + ").";
     }
+    if (type == "notification" && action == "file_available") {
+        return "[file " + visible(field(*data, "file_id")) + ", message " + visible(field(*data, "message_id")) +
+            "] user " + visible(field(*data, "sender_id")) + ": " + visible(field(*data, "name")) +
+            " (" + data->value("size_bytes", nlohmann::json{}).dump() + " bytes). Use /download " +
+            visible(field(*data, "file_id")) + " <path>.";
+    }
     if (type == "response" && message.value("ok", nlohmann::json{}) == true) {
         if (action == "ack_message") return {};
         if (action == "authenticate") return "Authenticated as user " + visible(field(*data, "user_id")) + ".";
@@ -116,13 +124,27 @@ std::string format_message(const nlohmann::json& message) {
 }
 
 std::optional<std::string> notification_id(const nlohmann::json& message) {
-    if (!message.is_object() || message.value("type", nlohmann::json{}) != "notification" ||
-        message.value("action", nlohmann::json{}) != "message") return std::nullopt;
+    if (!message.is_object() || message.value("type", nlohmann::json{}) != "notification") return std::nullopt;
+    const auto action = message.value("action", nlohmann::json{});
+    if (action != "message" && action != "file_available") return std::nullopt;
     const auto data = message.find("data");
     if (data == message.end() || !data->is_object()) return std::nullopt;
-    for (const auto* name : {"sender_id", "client_message_id", "text"}) {
+    for (const auto* name : {"sender_id"}) {
         const auto value = data->find(name);
         if (value == data->end() || !value->is_string()) return std::nullopt;
+    }
+    if (action == "message") {
+        for (const auto* name : {"client_message_id", "text"}) {
+            const auto value = data->find(name);
+            if (value == data->end() || !value->is_string()) return std::nullopt;
+        }
+    } else {
+        for (const auto* name : {"file_id", "name", "content_type"}) {
+            const auto value = data->find(name);
+            if (value == data->end() || !value->is_string()) return std::nullopt;
+        }
+        if (!valid_id(field(*data, "file_id")) || !data->contains("size_bytes") ||
+            !(*data)["size_bytes"].is_number_unsigned()) return std::nullopt;
     }
     const auto value = data->find("message_id");
     if (value == data->end() || !value->is_string()) return std::nullopt;
@@ -132,8 +154,8 @@ std::optional<std::string> notification_id(const nlohmann::json& message) {
 }
 } // namespace
 
-ConsoleClient::ConsoleClient(TcpClient& client, AuthClient& auth, bool json_output)
-    : client_(client), auth_(auth), json_output_(json_output), message_prefix_(random_prefix()),
+ConsoleClient::ConsoleClient(TcpClient& client, AuthClient& auth, FileClient& files, bool json_output)
+    : client_(client), auth_(auth), files_(files), json_output_(json_output), message_prefix_(random_prefix()),
       receiver_done_(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)) {
     if (receiver_done_.get() < 0) {
         throw std::system_error(errno, std::generic_category(), "eventfd");
@@ -172,12 +194,14 @@ bool ConsoleClient::send_line(std::string_view line) {
 
 void ConsoleClient::send_request(const std::string& action, nlohmann::json data) {
     const auto number = std::to_string(next_request_id_++);
+    const auto token = action == "authenticate" ? data.at("token").get<std::string>() : std::string{};
     if (action == "send_message" || action == "send_group_message") {
         data["client_message_id"] = message_prefix_ + "-" + number;
     }
     const auto payload = nlohmann::json{{"type", "request"}, {"request_id", "cli-" + number},
                                        {"action", action}, {"data", std::move(data)}}.dump();
     std::lock_guard<std::mutex> lock(send_mutex_);
+    if (!token.empty()) pending_tokens_["cli-" + number] = token;
     client_.send(payload);
 }
 
@@ -208,6 +232,27 @@ bool ConsoleClient::handle_command(std::string_view line) {
             return true;
         }
         send_request("authenticate", {{"token", token}});
+    } else if (command == "/upload" || command == "/download") {
+        std::string target, path;
+        if (!(input >> target >> std::quoted(path)) || path.empty() || (input >> extra)) {
+            throw std::invalid_argument("Usage: " + command + " " +
+                (command == "/upload" ? "<id[,id...]> <path>" : "<file-id> <path>"));
+        }
+        auto recipients = command == "/upload" ? parse_ids(target) : nlohmann::json::array();
+        if (command == "/download" && !valid_id(target)) throw std::invalid_argument("File ID must be a positive ID string");
+        std::string token;
+        { std::lock_guard<std::mutex> lock(send_mutex_); token = token_; }
+        try {
+            if (command == "/upload") {
+                const auto saved = files_.upload(token, path, std::move(recipients));
+                print("Uploaded file " + visible(saved.at("file_id").get<std::string>()) + ".\n");
+            } else {
+                files_.download(token, target, path);
+                print("Downloaded file " + target + " to " + visible(path) + ".\n");
+            }
+        } catch (const std::exception& error) {
+            print("Error: " + visible(error.what()) + "\n");
+        }
     } else if (command == "/create_group") {
         std::string name, members;
         if (!(input >> std::quoted(name))) throw std::invalid_argument("Usage: /create_group <name> [id,...]");
@@ -303,6 +348,14 @@ void ConsoleClient::display_message(std::string_view payload) {
     catch (const ProtocolError&) {
         print(json_output_ ? "\n< " + std::string(payload) + "\n> " : "\nInvalid server JSON.\n> ");
         return;
+    }
+    if (message.is_object() && field(message, "type") == "response" && field(message, "action") == "authenticate") {
+        std::lock_guard<std::mutex> lock(send_mutex_);
+        const auto pending = pending_tokens_.find(field(message, "request_id"));
+        if (pending != pending_tokens_.end()) {
+            if (message.value("ok", nlohmann::json{}) == true) token_ = std::move(pending->second);
+            pending_tokens_.erase(pending);
+        }
     }
     const auto id = notification_id(message);
     if (!id) {

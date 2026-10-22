@@ -2,19 +2,21 @@
 
 #include "net/tcp_client.h"
 #include "auth_client.h"
+#include "file_client.h"
 
 #include <deque>
 #include <exception>
 #include <mutex>
 #include <string_view>
 #include <unordered_set>
+#include <unordered_map>
 
 namespace chatroom {
 
 // Runs terminal input on the calling thread and replies on a joined receiver thread.
 class ConsoleClient {
 public:
-    ConsoleClient(TcpClient& client, AuthClient& auth, bool json_output = false);
+    ConsoleClient(TcpClient& client, AuthClient& auth, FileClient& files, bool json_output = false);
     void run();
 
 private:
@@ -30,6 +32,7 @@ private:
 
     TcpClient& client_;
     AuthClient& auth_;
+    FileClient& files_;
     bool json_output_;
     std::string message_prefix_;
     std::uint64_t next_request_id_ = 1;
@@ -38,6 +41,9 @@ private:
     // Serialize terminal requests, automatic ACKs, and the stdin EOF half-close.
     std::mutex send_mutex_;
     bool sending_finished_ = false;
+    // Both fields are protected by send_mutex_; retain tokens only after TCP success.
+    std::unordered_map<std::string, std::string> pending_tokens_;
+    std::string token_;
     std::unordered_set<std::string> received_messages_;
     std::deque<std::string> recent_messages_;
     std::exception_ptr receive_error_;

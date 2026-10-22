@@ -1,6 +1,6 @@
 # Authentication
 
-Registration and login run in C++ in the same process as TCP. HTTP defaults to
+Registration, login, and file transfers run in C++ in the same process as TCP. HTTP defaults to
 `127.0.0.1:8080`; TCP remains on port 8081. cpp-httplib handles HTTP/1.1, OpenSSL
 provides password hashing, and jwt-cpp signs JWTs.
 
@@ -42,6 +42,10 @@ Both endpoints accept POST with `Content-Type: application/json` and a UTF-8
 JSON object containing `username` and `password`. A charset parameter is accepted.
 Unknown fields are ignored. Bodies are limited to 4,096 bytes and 64 nested
 objects or arrays, counting the root as level 1.
+
+File endpoints use `Authorization: Bearer <JWT>` and check that its user still
+exists. They share the HTTP worker pool, while uploads have their own size limit
+and streaming reader. See [File Transfers](files.md).
 
 Usernames contain 1 to 64 UTF-8 bytes and are case-sensitive. Passwords contain 8
 to 128 UTF-8 bytes. Values are used exactly as supplied, including spaces and

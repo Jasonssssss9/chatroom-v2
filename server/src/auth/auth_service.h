@@ -20,6 +20,7 @@ public:
                                 const std::string& password) const;
     std::string login(ChatStore& store, const std::string& username,
                       const std::string& password) const;
+    std::uint64_t authenticate(ChatStore& store, std::string_view token) const;
     std::uint64_t token_lifetime_seconds() const { return tokens_.lifetime_seconds(); }
 
 private:

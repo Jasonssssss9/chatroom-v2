@@ -38,4 +38,12 @@ std::string AuthService::login(ChatStore& store, const std::string& username,
     return tokens_.issue(user->id);
 }
 
+std::uint64_t AuthService::authenticate(ChatStore& store, std::string_view token) const {
+    const auto session = tokens_.verify(token);
+    if (!session || !store.user_by_id(session->user_id)) {
+        throw AuthError(401, "invalid_token", "Token is invalid or expired");
+    }
+    return session->user_id;
+}
+
 } // namespace chatroom

@@ -179,8 +179,9 @@ TEST_CASE("File metadata is accessible only to the owner and selected recipients
     const auto recipient = fixture.store.create_user("recipient", "test-hash");
     const auto outsider = fixture.store.create_user("outsider", "test-hash");
     const std::uint64_t size = 5ULL * 1024 * 1024 * 1024;
-    const auto id = fixture.store.create_file(owner, "generated-key", "notes 'final'.txt",
+    const auto saved = fixture.store.create_file(owner, "generated-key", "notes 'final'.txt",
                                               "text/plain", size, {recipient, recipient});
+    const auto id = saved.id;
     const auto file = fixture.store.file_for_user(id, recipient);
     REQUIRE(file.has_value());
     CHECK(file->storage_key == "generated-key");
@@ -194,6 +195,15 @@ TEST_CASE("File metadata is accessible only to the owner and selected recipients
         {recipient, std::numeric_limits<std::uint64_t>::max()}), DatabaseError);
     CHECK(fixture.count("files") == 1);
     CHECK(fixture.count("file_recipients") == 1);
+    const auto pending = fixture.store.pending_messages(recipient);
+    REQUIRE(pending.size() == 1);
+    REQUIRE(pending[0].file);
+    CHECK(pending[0].id == saved.message_id);
+    CHECK(pending[0].file->id == id);
+    CHECK(pending[0].file->size_bytes == size);
+    CHECK(fixture.count("messages") == 1);
+    CHECK(fixture.store.acknowledge_message(recipient, saved.message_id));
+    CHECK(fixture.store.pending_messages(recipient).empty());
 }
 
 TEST_CASE("Independent worker connections deduplicate concurrent message retries", "[database]") {

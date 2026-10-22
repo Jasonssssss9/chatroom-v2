@@ -23,6 +23,11 @@ struct HttpConfig {
     std::size_t worker_threads = 4;
 };
 
+struct FileConfig {
+    std::string directory = "data/files";
+    std::uint64_t max_size_bytes = 10 * 1024 * 1024;
+};
+
 struct ServerConfig {
     std::string address = "127.0.0.1";
     std::uint16_t port = 8081;
@@ -33,6 +38,7 @@ struct ServerConfig {
     LogLevel log_level = LogLevel::info;
     DatabaseConfig database;
     HttpConfig http;
+    FileConfig files;
     std::string jwt_secret;
     std::uint64_t token_lifetime_seconds = 3600;
 };

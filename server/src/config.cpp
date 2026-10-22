@@ -100,6 +100,11 @@ void read_file(ServerConfig& config, const std::string& path) {
         config.token_lifetime_seconds = read_number(jwt.at("token_lifetime_seconds"),
                                                     "jwt.token_lifetime_seconds", 1, 86400);
     }
+    const auto files = section(document, "files");
+    if (files.contains("directory")) config.files.directory = read_text(files.at("directory"), "files.directory");
+    if (files.contains("max_size_bytes")) {
+        config.files.max_size_bytes = read_number(files.at("max_size_bytes"), "files.max_size_bytes", 1, 1024ULL * 1024 * 1024);
+    }
     const auto database = section(document, "database");
     if (database.contains("host")) config.database.host = read_text(database.at("host"), "database.host");
     if (database.contains("port")) {

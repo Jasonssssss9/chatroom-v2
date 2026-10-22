@@ -1,6 +1,7 @@
 #include "database_fixture.h"
 #include "http/http_server.h"
 #include "request_dispatcher.h"
+#include "temp_directory.h"
 
 #include <algorithm>
 #include <arpa/inet.h>
@@ -23,12 +24,14 @@ public:
     RequestDispatcher dispatcher;
     HttpServer http;
 
-    explicit RunningChat(DatabaseConfig database = test_config())
+    explicit RunningChat(DatabaseConfig database = test_config(), FileConfig files = {})
         : handler(tokens, database),
           dispatcher(server, [this](ConnectionId, const Request& request, std::optional<Session> session) {
               return handler.handle(request, session);
           }, 2, 32, 1024, [this](std::uint64_t user) { return handler.pending_messages(user); }),
-          http(auth, database, "127.0.0.1", HttpConfig{0, 2}) {
+          http(auth, database, "127.0.0.1", HttpConfig{0, 2}, std::move(files), [this](UserNotification notification) {
+              server.post([this, notification = std::move(notification)] { dispatcher.notify(notification); });
+          }) {
         server.set_message_handler([this](ConnectionId id, std::string payload) {
             dispatcher.enqueue(id, std::move(payload));
         });
@@ -111,6 +114,57 @@ private:
     }
 };
 } // namespace
+
+TEST_CASE("File notifications route online and replay offline until acknowledged", "[database][tcp][file]") {
+    DatabaseFixture fixture;
+    TempDirectory directory;
+    RunningChat running(test_config(), FileConfig{directory.path.string(), 128 * 1024});
+    const auto owner = fixture.store.create_user("owner", "test-hash");
+    const auto online = fixture.store.create_user("online", "test-hash");
+    const auto offline = fixture.store.create_user("offline", "test-hash");
+    std::string message;
+    {
+        Peer peer(running.server.port());
+        peer.send("authenticate", {{"token", running.tokens.issue(online)}});
+        REQUIRE(peer.receive()["ok"] == true);
+        httplib::Client http("127.0.0.1", running.http.port());
+        const httplib::Headers headers{{"Authorization", "Bearer " + running.tokens.issue(owner)},
+            {"X-File-Metadata", json{{"name", "notes.bin"}, {"recipients", {std::to_string(online), std::to_string(offline)}}}.dump()}};
+        const auto uploaded = http.Post("/api/files", headers, std::string(100000, '\0'), "application/octet-stream");
+        REQUIRE(uploaded);
+        REQUIRE(uploaded->status == 201);
+        const auto result = json::parse(uploaded->body);
+        message = result["message_id"].get<std::string>();
+        const auto notice = peer.receive();
+        CHECK(notice["action"] == "file_available");
+        CHECK(notice["data"]["message_id"] == message);
+        CHECK(notice["data"]["file_id"] == result["file_id"]);
+        CHECK(notice["data"]["size_bytes"] == 100000);
+        // Disconnect without ACK; the same notice must replay on the next session.
+    }
+    fixture.store.save_direct_message(owner, "alongside-file", "text alongside the file", {offline});
+    for (const auto user : {online, offline}) {
+        Peer peer(running.server.port());
+        peer.send("authenticate", {{"token", running.tokens.issue(user)}});
+        REQUIRE(peer.receive()["ok"] == true);
+        const auto notice = peer.receive();
+        CHECK(notice["action"] == "file_available");
+        CHECK(notice["data"]["message_id"] == message);
+        peer.send("ack_message", {{"message_id", message}});
+        if (user == offline) {
+            const auto text = peer.receive();
+            CHECK(text["action"] == "message");
+            CHECK(text["data"]["text"] == "text alongside the file");
+            peer.send("ack_message", {{"message_id", text["data"]["message_id"]}});
+            CHECK(peer.receive()["ok"] == true);
+        }
+        CHECK(peer.receive()["ok"] == true);
+        peer.send("ack_message", {{"message_id", message}});
+        CHECK(peer.receive()["ok"] == true);
+        CHECK(fixture.store.pending_messages(user).empty());
+    }
+    running.check();
+}
 
 TEST_CASE("HTTP tokens authenticate TCP sessions and successful login replaces the previous peer",
           "[database][http][tcp][auth]") {

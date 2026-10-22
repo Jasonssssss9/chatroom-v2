@@ -9,6 +9,11 @@ HTTP authentication uses cpp-httplib's own fixed worker pool. HTTP workers handl
 password hashing and SQL independently of the TCP Reactor and its request pool.
 See [HTTP Authentication](authentication.md) for HTTP limits and lifetimes.
 
+File uploads and downloads use that same HTTP pool. File bytes stream on workers;
+successful uploads post a short `UserNotification` callback through `TcpServer::post()`.
+Only the Reactor calls `RequestDispatcher::notify()` to resolve online sessions.
+File notices share the existing ACK/replay window. See [File Transfers](files.md).
+
 ## Responsibilities
 
 | Component | Responsibility |

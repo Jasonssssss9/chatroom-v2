@@ -1,6 +1,9 @@
 #include "net/tcp_client.h"
 #include "auth_client.h"
 #include "protocol.h"
+#include "file_client.h"
+#include "pending_file.h"
+#include "temp_directory.h"
 
 #include <arpa/inet.h>
 #include <array>
@@ -12,6 +15,7 @@
 #include <exception>
 #include <functional>
 #include <future>
+#include <fstream>
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
@@ -216,7 +220,9 @@ public:
     explicit TestAuthServer(httplib::Server::Handler handler) {
         server_.new_task_queue = [] { return new httplib::ThreadPool(1); };
         server_.Post("/api/users", handler);
-        server_.Post("/api/auth/token", std::move(handler));
+        server_.Post("/api/auth/token", handler);
+        server_.Post("/api/files", handler);
+        server_.Get("/api/files/7", std::move(handler));
         const int port = server_.bind_to_any_port("127.0.0.1");
         if (port < 0) throw std::runtime_error("Cannot bind the test authentication server");
         port_ = static_cast<std::uint16_t>(port);
@@ -235,6 +241,137 @@ private:
     std::thread thread_;
 };
 } // namespace
+
+TEST_CASE("Pending files clean up failures and never overwrite existing paths", "[client][file]") {
+    TempDirectory directory;
+    const auto path = directory.path / "file.bin";
+    {
+        PendingFile file(path);
+        file.append("partial");
+        CHECK(std::filesystem::exists(path));
+    }
+    CHECK_FALSE(std::filesystem::exists(path));
+    {
+        PendingFile file(path);
+        file.append("complete");
+        file.finish();
+        file.keep();
+    }
+    CHECK_THROWS_AS(PendingFile(path), std::system_error);
+    CHECK(std::filesystem::file_size(path) == 8);
+}
+
+TEST_CASE("The file client streams uploads and downloads without overwriting local files", "[client][http][file]") {
+    TempDirectory directory;
+    const auto input = directory.path / "notes final.bin";
+    const auto output = directory.path / "download.bin";
+    std::string bytes;
+    SECTION("Binary file") { bytes = std::string(100000, 'x') + std::string("\0\xff\n", 3); }
+    SECTION("Empty file") {}
+    { std::ofstream file(input, std::ios::binary); file.write(bytes.data(), bytes.size()); }
+    TestAuthServer server([&](const httplib::Request& request, httplib::Response& response) {
+        if (request.get_header_value("Authorization") != "Bearer file-test-token") { response.status = 401; return; }
+        if (request.method == "GET") { response.set_content(bytes, "application/octet-stream"); return; }
+        const auto metadata = parse_json(request.get_header_value("X-File-Metadata"));
+        if (metadata != nlohmann::json{{"name", "notes final.bin"}, {"recipients", {"2", "3"}}} || request.body != bytes) {
+            response.status = 400;
+            return;
+        }
+        response.status = 201;
+        response.set_content(R"({"file_id":"7","message_id":"9"})", "application/json");
+    });
+    FileClient files("127.0.0.1", server.port());
+    CHECK(files.upload("file-test-token", input, {"2", "3"})["file_id"] == "7");
+    files.download("file-test-token", "7", output);
+    std::ifstream downloaded(output, std::ios::binary);
+    CHECK(std::string(std::istreambuf_iterator<char>(downloaded), {}) == bytes);
+    CHECK_THROWS_AS(files.download("file-test-token", "7", output), std::system_error);
+    CHECK(std::filesystem::file_size(output) == bytes.size());
+    CHECK_THROWS_AS(files.upload("", input, {"2"}), std::runtime_error);
+    CHECK_THROWS_AS(files.upload("file-test-token", directory.path, {"2"}), std::runtime_error);
+}
+
+TEST_CASE("File download failures remove partial output and report JSON errors", "[client][http][file]") {
+    TempDirectory directory;
+    bool truncated = false;
+    SECTION("HTTP error") {}
+    SECTION("Connection closes during the body") { truncated = true; }
+    TestAuthServer server([&](const httplib::Request&, httplib::Response& response) {
+        if (truncated) {
+            response.set_content_provider(100, "application/octet-stream",
+                [](std::size_t, std::size_t, httplib::DataSink& sink) { sink.write("short", 5); return false; });
+        } else {
+            response.status = 404;
+            response.set_content(R"({"error":{"code":"file_not_found","message":"File is unavailable"}})", "application/json");
+        }
+    });
+    FileClient files("127.0.0.1", server.port());
+    const auto output = directory.path / "missing.bin";
+    if (truncated) CHECK_THROWS_AS(files.download("file-test-token", "7", output), std::runtime_error);
+    else CHECK_THROWS_WITH(files.download("file-test-token", "7", output), "file_not_found: File is unavailable");
+    CHECK_FALSE(std::filesystem::exists(output));
+}
+
+TEST_CASE("Console file commands retain the successful login and acknowledge duplicate file notices", "[client][console][file]") {
+    TempDirectory directory;
+    const auto input = directory.path / "notes final.bin";
+    const auto output = directory.path / "download final.bin";
+    { std::ofstream file(input, std::ios::binary); file << "file bytes"; }
+    int logins = 0;
+    TestAuthServer http([&](const httplib::Request& request, httplib::Response& response) {
+        if (request.path == "/api/auth/token") {
+            response.set_content(nlohmann::json{{"access_token", ++logins == 1 ? "first-token" : "second-token"}}.dump(), "application/json");
+        } else if (request.get_header_value("Authorization") != "Bearer first-token") {
+            response.status = 401;
+        } else if (request.method == "GET") response.set_content("file bytes", "application/octet-stream");
+        else {
+            response.status = 201;
+            response.set_content(R"({"file_id":"7","message_id":"9"})", "application/json");
+        }
+    });
+    TestPeer peer([](int socket) {
+        const auto login = parse_request(receive_payload(socket));
+        send_bytes(socket, encode_frame(make_response(login, {{"user_id", "1"}}).dump()));
+        const auto failed = parse_request(receive_payload(socket));
+        send_bytes(socket, encode_frame(make_error_response(failed, "already_authenticated", "Reconnect to change users").dump()));
+        const auto notice = make_notification("file_available", {{"message_id", "9"}, {"file_id", "7"},
+            {"sender_id", "2"}, {"name", "notes final.bin"}, {"content_type", "application/octet-stream"}, {"size_bytes", 10}}).dump();
+        send_bytes(socket, encode_frame(notice) + encode_frame(notice));
+        int acknowledgments = 0;
+        bool pinged = false;
+        // Terminal requests may be interleaved with automatic ACKs.
+        for (int i = 0; i < 3; ++i) {
+            const auto request = parse_request(receive_payload(socket));
+            if (request.action == "ack_message" && request.data["message_id"] == "9") {
+                ++acknowledgments;
+                send_bytes(socket, encode_frame(make_response(request, {{"message_id", "9"}}).dump()));
+            } else if (request.action == "ping") {
+                pinged = true;
+                send_bytes(socket, encode_frame(make_response(request, {{"pong", true}}).dump()));
+            } else throw std::runtime_error("Unexpected request during file commands");
+        }
+        if (acknowledgments != 2 || !pinged) throw std::runtime_error("Missing file ACK or ping");
+    });
+    ConsoleProcess console(peer.port(), http.port(), false);
+    console.write("/login alice example-password\n");
+    console.read_until("Authenticated as user 1.");
+    console.write("/login bob example-password\n");
+    console.read_until("Reconnect to change users");
+    console.write("/upload 2 \"" + input.string() + "\"\n");
+    console.read_until("Uploaded file 7.");
+    console.write("/download 7 \"" + output.string() + "\"\n");
+    console.read_until("Downloaded file 7 to ");
+    CHECK(std::filesystem::file_size(output) == 10);
+    console.write("/ping\n");
+    peer.check();
+    const auto text = console.read_until("Pong.");
+    const auto marker = "[file 7, message 9]";
+    CHECK(text.find(marker) != std::string::npos);
+    CHECK(text.find(marker, text.find(marker) + 1) == std::string::npos);
+    CHECK(text.find("first-token") == std::string::npos);
+    CHECK(text.find("second-token") == std::string::npos);
+    console.check();
+}
 
 TEST_CASE("HTTP client sends exact credentials and validates registration and login results", "[client][http]") {
     TestAuthServer server([](const httplib::Request& request, httplib::Response& response) {
