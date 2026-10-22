@@ -5,7 +5,8 @@
     "worker_threads": 4,
     "max_connections": 1024,
     "max_requests_per_connection": 32,
-    "max_pending_requests": 1024
+    "max_pending_requests": 1024,
+    "idle_timeout_seconds": 90
   },
   "http": {
     "port": 8080,

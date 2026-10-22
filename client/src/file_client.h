@@ -14,6 +14,8 @@ public:
     nlohmann::json upload(const std::string& token, const std::filesystem::path& path,
                           nlohmann::json recipients);
     void download(const std::string& token, const std::string& id, const std::filesystem::path& path);
+    // Cancels an in-flight transfer when the TCP connection is lost.
+    void stop() { client_.stop(); }
 
 private:
     httplib::Client client_;

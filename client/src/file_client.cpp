@@ -12,7 +12,8 @@ void check_response(const httplib::Result& response, const std::string& body, in
     try {
         const auto data = parse_json(body);
         const auto& error = data.at("error");
-        throw std::runtime_error(error.at("code").get<std::string>() + ": " + error.at("message").get<std::string>());
+        throw std::runtime_error(error.at("code").get<std::string>() + ": " + error.at("message").get<std::string>() +
+                                 (response->status == 401 ? ". Use /login to authenticate again." : ""));
     } catch (const ProtocolError&) {
         throw std::runtime_error("File HTTP status " + std::to_string(response->status));
     } catch (const nlohmann::json::exception&) {

@@ -10,6 +10,7 @@ The server currently supports:
 
 - Parsing and validating request envelopes.
 - A correlated response to `ping`.
+- Automatic console heartbeats and server idle cleanup using the existing ping protocol.
 - JWT authentication with `authenticate` and Reactor-owned user sessions.
 - Persisted private and multi-recipient messages with online notifications.
 - Consistent errors for malformed JSON, invalid requests, and unsupported actions.
@@ -243,7 +244,9 @@ Obtain a token through HTTP login, then send:
 ```
 
 `token` must contain 1 to 4,096 bytes. Success returns
-`{"user_id":"1"}` in response data. The identity is verified on a worker and
+`{"user_id":"1","expires_at":2000000000}` in response data. `expires_at` is the
+verified token's expiration in Unix seconds, used for the console's local reminder.
+The identity is verified on a worker and
 bound on the Reactor before the next request starts. Every TCP action other than
 `ping` and `authenticate` requires an unexpired session. A successful
 authentication on another connection replaces the user's previous connection.
@@ -252,6 +255,8 @@ connection. Failed authentication preserves any existing session.
 
 See [Authentication](authentication.md#tcp-connection-authentication) for token
 claims, expiration, duplicate login, and disconnect behavior.
+See [Connection Keepalive](keepalive.md) for automatic ping correlation, timeout
+configuration, and the distinction between connection and session expiration.
 
 ### send_message
 

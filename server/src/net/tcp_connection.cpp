@@ -15,6 +15,7 @@ std::vector<std::string> TcpConnection::receive() {
     char buffer[8192];
     while (true) {
         while (auto frame = decoder_.next()) {
+            last_activity_ = std::chrono::steady_clock::now();
             frames.push_back(std::move(*frame));
             if (frames.size() == kReceiveBatchSize) {
                 return frames;

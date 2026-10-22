@@ -1,6 +1,7 @@
 #include "console_client.h"
 #include "protocol.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <charconv>
 #include <iomanip>
@@ -79,7 +80,8 @@ std::string format_message(const nlohmann::json& message) {
         const auto error = message.find("error");
         if (error != message.end() && error->is_object()) {
             return "Error [" + visible(action) + "]: " + visible(field(*error, "code")) +
-                   ": " + visible(field(*error, "message"));
+                   ": " + visible(field(*error, "message")) +
+                   (field(*error, "code") == "authentication_required" ? ". Use /login to authenticate." : "");
         }
     }
     const auto data = message.find("data");
@@ -170,12 +172,18 @@ std::optional<std::string> notification_id(const nlohmann::json& message) {
 }
 } // namespace
 
-ConsoleClient::ConsoleClient(TcpClient& client, AuthClient& auth, FileClient& files, bool json_output)
-    : client_(client), auth_(auth), files_(files), json_output_(json_output), message_prefix_(random_prefix()),
+ConsoleClient::ConsoleClient(TcpClient& client, AuthClient& auth, FileClient& files, bool json_output,
+                             HeartbeatConfig heartbeat)
+    : client_(client), auth_(auth), files_(files), json_output_(json_output), heartbeat_(heartbeat), message_prefix_(random_prefix()),
       receiver_done_(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)) {
     if (receiver_done_.get() < 0) {
         throw std::system_error(errno, std::generic_category(), "eventfd");
     }
+    if (heartbeat_.interval.count() < 1 || heartbeat_.interval.count() > 3600 ||
+        heartbeat_.timeout.count() < 1 || heartbeat_.timeout.count() > 3600) {
+        throw std::invalid_argument("Heartbeat interval and timeout must be between 1 and 3600 seconds");
+    }
+    next_heartbeat_ = std::chrono::steady_clock::now() + heartbeat_.interval;
 }
 
 void ConsoleClient::print(std::string_view text) {
@@ -216,8 +224,11 @@ void ConsoleClient::send_request(const std::string& action, nlohmann::json data)
     }
     const auto payload = nlohmann::json{{"type", "request"}, {"request_id", "cli-" + number},
                                        {"action", action}, {"data", std::move(data)}}.dump();
+    if (!token.empty()) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        pending_tokens_["cli-" + number] = token;
+    }
     std::lock_guard<std::mutex> lock(send_mutex_);
-    if (!token.empty()) pending_tokens_["cli-" + number] = token;
     client_.send(payload);
 }
 
@@ -257,7 +268,7 @@ bool ConsoleClient::handle_command(std::string_view line) {
         auto recipients = command == "/upload" ? parse_ids(target) : nlohmann::json::array();
         if (command == "/download" && !valid_id(target)) throw std::invalid_argument("File ID must be a positive ID string");
         std::string token;
-        { std::lock_guard<std::mutex> lock(send_mutex_); token = token_; }
+        { std::lock_guard<std::mutex> lock(state_mutex_); token = token_; }
         try {
             if (command == "/upload") {
                 const auto saved = files_.upload(token, path, std::move(recipients));
@@ -373,13 +384,45 @@ void ConsoleClient::display_message(std::string_view payload) {
         print(json_output_ ? "\n< " + std::string(payload) + "\n> " : "\nInvalid server JSON.\n> ");
         return;
     }
+    if (message.is_object() && field(message, "type") == "response") {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (!heartbeat_request_.empty() && field(message, "request_id") == heartbeat_request_ &&
+            field(message, "action") == "ping" && message.value("ok", nlohmann::json{}) == true &&
+            message.contains("data") && message["data"].is_object() &&
+            message["data"].value("pong", nlohmann::json{}) == true) {
+            if (heartbeat_deadline_ && std::chrono::steady_clock::now() < *heartbeat_deadline_) {
+                heartbeat_request_.clear();
+                heartbeat_deadline_.reset();
+                next_heartbeat_ = std::chrono::steady_clock::now() + heartbeat_.interval;
+                state_changed_.notify_all();
+            }
+            if (!json_output_) return;
+        }
+    }
     if (message.is_object() && field(message, "type") == "response" && field(message, "action") == "authenticate") {
-        std::lock_guard<std::mutex> lock(send_mutex_);
+        std::lock_guard<std::mutex> lock(state_mutex_);
         const auto pending = pending_tokens_.find(field(message, "request_id"));
         if (pending != pending_tokens_.end()) {
             if (message.value("ok", nlohmann::json{}) == true) token_ = std::move(pending->second);
             pending_tokens_.erase(pending);
         }
+        if (message.value("ok", nlohmann::json{}) == true) {
+            session_expires_at_.reset();
+            const auto data = message.find("data");
+            if (data != message.end() && data->is_object()) {
+                const auto expires = data->find("expires_at");
+                const auto maximum = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::system_clock::duration::max()).count();
+                if (expires != data->end() && expires->is_number_integer() && *expires > 0 && *expires <= maximum) {
+                    session_expires_at_ = std::chrono::system_clock::time_point(std::chrono::seconds(expires->get<std::int64_t>()));
+                }
+            }
+            state_changed_.notify_all();
+        }
+        // Show the authentication result before the timer can report its expiry.
+        const auto text = json_output_ ? "< " + std::string(payload) : format_message(message);
+        if (!text.empty()) print("\n" + text + "\n> ");
+        return;
     }
     const auto id = notification_id(message);
     if (!id) {
@@ -407,9 +450,16 @@ void ConsoleClient::receive_messages() {
         while (auto payload = client_.receive()) {
             display_message(*payload);
         }
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            if (!stopping_) print("\nConnection closed by server. Reconnect and use /login to continue.\n");
+        }
     } catch (...) {
         receive_error_ = std::current_exception();
     }
+    stop_heartbeat();
+    auth_.stop();
+    files_.stop();
 
     const std::uint64_t value = 1;
     ssize_t result;
@@ -418,12 +468,68 @@ void ConsoleClient::receive_messages() {
     } while (result < 0 && errno == EINTR);
 }
 
+void ConsoleClient::stop_heartbeat() {
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        stopping_ = true;
+    }
+    state_changed_.notify_all();
+}
+
+void ConsoleClient::heartbeat_loop() {
+    try {
+        std::uint64_t number = 0;
+        std::unique_lock<std::mutex> state(state_mutex_);
+        while (!stopping_) {
+            const auto now = std::chrono::steady_clock::now();
+            if (session_expires_at_ && std::chrono::system_clock::now() >= *session_expires_at_) {
+                session_expires_at_.reset();
+                token_.clear();
+                print("\nLogin expired. Use /login to authenticate again.\n> ");
+            }
+            if (heartbeat_deadline_ && now >= *heartbeat_deadline_) {
+                throw std::runtime_error("Heartbeat timed out. Reconnect and use /login to continue");
+            }
+            if (!heartbeat_deadline_ && now >= next_heartbeat_) {
+                heartbeat_request_ = "heartbeat-" + std::to_string(++number);
+                heartbeat_deadline_ = now + heartbeat_.timeout;
+                const auto payload = nlohmann::json{{"type", "request"}, {"request_id", heartbeat_request_},
+                    {"action", "ping"}}.dump();
+                state.unlock();
+                {
+                    std::lock_guard<std::mutex> send(send_mutex_);
+                    if (!sending_finished_) client_.send(payload);
+                }
+                state.lock();
+                continue;
+            }
+            auto wake_at = heartbeat_deadline_.value_or(next_heartbeat_);
+            if (session_expires_at_) {
+                const auto until_expiry = *session_expires_at_ - std::chrono::system_clock::now();
+                wake_at = std::min(wake_at, now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(until_expiry));
+            }
+            state_changed_.wait_until(state, wake_at);
+        }
+    } catch (...) {
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            if (!stopping_) heartbeat_error_ = std::current_exception();
+            stopping_ = true;
+        }
+        client_.disconnect();
+        state_changed_.notify_all();
+    }
+}
+
 void ConsoleClient::run() {
     print("Use /help for commands. JSON requests are also accepted.\n> ");
     std::thread receiver([this] { receive_messages(); });
+    std::thread heartbeat;
     InputResult result;
     try {
+        heartbeat = std::thread([this] { heartbeat_loop(); });
         result = read_input();
+        stop_heartbeat();
         if (result == InputResult::eof) {
             std::lock_guard<std::mutex> lock(send_mutex_);
             sending_finished_ = true;
@@ -432,11 +538,16 @@ void ConsoleClient::run() {
             client_.disconnect();
         }
     } catch (...) {
+        stop_heartbeat();
         client_.disconnect();
+        if (heartbeat.joinable()) heartbeat.join();
         receiver.join();
+        if (heartbeat_error_) std::rethrow_exception(heartbeat_error_);
         throw;
     }
+    heartbeat.join();
     receiver.join();
+    if (result != InputResult::quit && heartbeat_error_) std::rethrow_exception(heartbeat_error_);
     // Local cancellation can interrupt a partially received frame.
     if (result != InputResult::quit && receive_error_) {
         std::rethrow_exception(receive_error_);

@@ -136,22 +136,28 @@ private:
 // Exercise the real console with piped input, without changing the test runner's stdin.
 class ConsoleProcess {
 public:
-    explicit ConsoleProcess(std::uint16_t port, std::uint16_t http_port = 8080, bool json_output = true) {
+    explicit ConsoleProcess(std::uint16_t port, std::uint16_t http_port = 8080, bool json_output = true,
+                            unsigned int heartbeat_interval = 30, unsigned int heartbeat_timeout = 60) {
         auto input = pipe();
         auto output = pipe();
         const auto port_text = std::to_string(port);
         const auto http_text = std::to_string(http_port);
+        const auto interval_text = std::to_string(heartbeat_interval);
+        const auto timeout_text = std::to_string(heartbeat_timeout);
         pid_ = ::fork();
         check_socket(pid_, "fork");
         if (pid_ == 0) {
             if (::dup2(input[0].get(), STDIN_FILENO) < 0 ||
-                ::dup2(output[1].get(), STDOUT_FILENO) < 0) ::_exit(127);
+                ::dup2(output[1].get(), STDOUT_FILENO) < 0 ||
+                ::dup2(output[1].get(), STDERR_FILENO) < 0) ::_exit(127);
             if (json_output) {
                 ::execl(CHATROOM_CLIENT_PATH, CHATROOM_CLIENT_PATH, "--json", "127.0.0.1",
-                        port_text.c_str(), http_text.c_str(), nullptr);
+                        port_text.c_str(), http_text.c_str(), "--heartbeat-interval", interval_text.c_str(),
+                        "--heartbeat-timeout", timeout_text.c_str(), nullptr);
             } else {
                 ::execl(CHATROOM_CLIENT_PATH, CHATROOM_CLIENT_PATH, "127.0.0.1",
-                        port_text.c_str(), http_text.c_str(), nullptr);
+                        port_text.c_str(), http_text.c_str(), "--heartbeat-interval", interval_text.c_str(),
+                        "--heartbeat-timeout", timeout_text.c_str(), nullptr);
             }
             ::_exit(127);
         }
@@ -177,10 +183,10 @@ public:
 
     void finish_input() { input_.reset(); }
 
-    const std::string& read_until(std::string_view marker) {
+    const std::string& read_until(std::string_view marker, int timeout_ms = 2000) {
         while (text_.find(marker) == std::string::npos) {
             pollfd event{output_.get(), POLLIN, 0};
-            const auto ready = ::poll(&event, 1, 2000);
+            const auto ready = ::poll(&event, 1, timeout_ms);
             if (ready < 0 && errno == EINTR) continue;
             if (ready <= 0) throw std::runtime_error("Timed out waiting for console output");
             char buffer[4096];
@@ -192,14 +198,14 @@ public:
         return text_;
     }
 
-    void check() {
+    void check(int expected_exit = 0) {
         int status;
         pid_t result;
         do { result = ::waitpid(pid_, &status, 0); } while (result < 0 && errno == EINTR);
         check_socket(result, "waitpid");
         pid_ = -1;
         REQUIRE(WIFEXITED(status));
-        CHECK(WEXITSTATUS(status) == 0);
+        CHECK(WEXITSTATUS(status) == expected_exit);
     }
 
 private:
@@ -241,6 +247,216 @@ private:
     std::thread thread_;
 };
 } // namespace
+
+TEST_CASE("Console sends periodic heartbeats and only displays manual pongs", "[client][console][heartbeat]") {
+    std::promise<void> first_probe;
+    auto received = first_probe.get_future();
+    TestPeer peer([&](int fd) {
+        int automatic = 0;
+        int manual = 0;
+        while (automatic < 2 || manual < 1) {
+            const auto request = parse_request(receive_payload(fd));
+            if (request.action != "ping") throw std::runtime_error("Heartbeat must use ping");
+            if (request.request_id.find("heartbeat-") == 0) {
+                if (++automatic == 1) first_probe.set_value();
+            } else ++manual;
+            send_bytes(fd, encode_frame(make_response(request, {{"pong", true}}).dump()));
+        }
+    });
+    ConsoleProcess console(peer.port(), 8080, false, 1, 2);
+    REQUIRE(received.wait_for(3s) == std::future_status::ready);
+    console.write("/ping\n");
+    const auto& output = console.read_until("Disconnected.", 5000);
+    const auto first = output.find("Pong.");
+    REQUIRE(first != std::string::npos);
+    CHECK(output.find("Pong.", first + 1) == std::string::npos);
+    CHECK(output.find("Connection closed by server") != std::string::npos);
+    console.check();
+    peer.check();
+}
+
+TEST_CASE("A missing or unrelated pong cancels the console even with a partial frame", "[client][console][heartbeat]") {
+    bool partial = false;
+    bool unrelated = false;
+    SECTION("No reply") {}
+    SECTION("Partial frame") { partial = true; }
+    SECTION("Unrelated pong") { unrelated = true; }
+    TestPeer peer([&](int fd) {
+        const auto request = parse_request(receive_payload(fd));
+        if (request.action != "ping") throw std::runtime_error("Expected heartbeat");
+        if (partial) send_bytes(fd, encode_frame("unfinished").substr(0, 2));
+        if (unrelated) send_bytes(fd, encode_frame(make_response(Request{"other", "ping"}, {{"pong", true}}).dump()));
+        char byte;
+        const auto count = ::recv(fd, &byte, 1, 0);
+        if (count != 0 && !(count < 0 && errno == ECONNRESET)) throw std::runtime_error("Heartbeat did not close the client");
+    });
+    ConsoleProcess console(peer.port(), 8080, false, 1, 1);
+    console.read_until("Heartbeat timed out", 5000);
+    console.check(1);
+    peer.check();
+}
+
+TEST_CASE("Stdin EOF stops heartbeats while delayed final replies remain readable", "[client][console][heartbeat]") {
+    TestPeer peer([](int fd) {
+        const auto request = parse_request(receive_payload(fd));
+        send_bytes(fd, encode_frame(make_response(request, {{"pong", true}}).dump()));
+        char byte;
+        if (::recv(fd, &byte, 1, 0) != 0) throw std::runtime_error("Expected EOF without another heartbeat");
+        // Cross both one-second timer deadlines before sending the final response.
+        std::this_thread::sleep_for(2200ms);
+        send_bytes(fd, encode_frame(make_notification("group_created", {
+            {"group_id", "7"}, {"owner_id", "1"}, {"name", "Final group"}}).dump()));
+    });
+    ConsoleProcess console(peer.port(), 8080, false, 1, 1);
+    console.write("/ping\n");
+    console.finish_input();
+    const auto& output = console.read_until("Disconnected.", 5000);
+    CHECK(output.find("Final group") != std::string::npos);
+    CHECK(output.find("Heartbeat timed out") == std::string::npos);
+    console.check();
+    peer.check();
+}
+
+TEST_CASE("Heartbeats continue while the input thread is uploading a file", "[client][console][heartbeat][file]") {
+    TempDirectory directory;
+    const auto path = directory.path / "file.bin";
+    { std::ofstream file(path); file << "file bytes"; }
+    std::promise<void> uploading;
+    auto started = uploading.get_future();
+    std::promise<void> probe;
+    auto probed = probe.get_future();
+    TestAuthServer http([&](const httplib::Request& request, httplib::Response& response) {
+        if (request.path == "/api/auth/token") {
+            response.set_content(R"({"access_token":"test-token"})", "application/json");
+        } else {
+            uploading.set_value();
+            if (probed.wait_for(3s) != std::future_status::ready) { response.status = 500; return; }
+            response.status = 201;
+            response.set_content(R"({"file_id":"7","message_id":"9"})", "application/json");
+        }
+    });
+    TestPeer peer([&](int fd) {
+        const auto auth = parse_request(receive_payload(fd));
+        send_bytes(fd, encode_frame(make_response(auth, {{"user_id", "1"}}).dump()));
+        bool during_upload = false;
+        while (true) {
+            const auto request = parse_request(receive_payload(fd));
+            if (request.action != "ping") throw std::runtime_error("Unexpected request during upload");
+            send_bytes(fd, encode_frame(make_response(request, {{"pong", true}}).dump()));
+            if (request.request_id.find("heartbeat-") != 0) break;
+            if (!during_upload && started.wait_for(0s) == std::future_status::ready) {
+                during_upload = true;
+                probe.set_value();
+            }
+        }
+        if (!during_upload) throw std::runtime_error("No heartbeat arrived during upload");
+    });
+    ConsoleProcess console(peer.port(), http.port(), false, 1, 2);
+    console.write("/login alice example-password\n");
+    console.read_until("Authenticated as user 1.");
+    console.write("/upload 2 " + path.string() + "\n");
+    console.read_until("Uploaded file 7.", 5000);
+    console.write("/ping\n");
+    console.read_until("Disconnected.");
+    console.check();
+    peer.check();
+}
+
+TEST_CASE("Server disconnect cancels an in-flight HTTP upload", "[client][console][heartbeat][file]") {
+    TempDirectory directory;
+    const auto path = directory.path / "file.bin";
+    { std::ofstream file(path); file << "file"; }
+    std::promise<void> upload_started;
+    auto started = upload_started.get_future();
+    std::promise<void> release;
+    auto released = release.get_future();
+    TestAuthServer http([&](const httplib::Request& request, httplib::Response& response) {
+        if (request.path == "/api/auth/token") {
+            response.set_content(R"({"access_token":"test-token"})", "application/json");
+        } else {
+            upload_started.set_value();
+            released.wait_for(3s);
+            response.status = 500;
+        }
+    });
+    TestPeer peer([&](int fd) {
+        const auto auth = parse_request(receive_payload(fd));
+        send_bytes(fd, encode_frame(make_response(auth, {{"user_id", "1"}}).dump()));
+        if (started.wait_for(2s) != std::future_status::ready) throw std::runtime_error("Upload never started");
+    });
+    ConsoleProcess console(peer.port(), http.port(), false);
+    console.write("/login alice example-password\n");
+    console.read_until("Authenticated as user 1.");
+    console.write("/upload 2 " + path.string() + "\n");
+    console.read_until("Disconnected.");
+    console.check();
+    release.set_value();
+    peer.check();
+}
+
+TEST_CASE("The console reports login expiry, clears its file token, and accepts a refresh", "[client][console][heartbeat][auth]") {
+    int first_lifetime = 1;
+    SECTION("Expires while idle") {}
+    SECTION("Expires before the authentication response arrives") { first_lifetime = 0; }
+    TempDirectory directory;
+    const auto path = directory.path / "file.bin";
+    { std::ofstream file(path); file << "file"; }
+    TestAuthServer http([](const httplib::Request&, httplib::Response& response) {
+        response.set_content(R"({"access_token":"test-token"})", "application/json");
+    });
+    TestPeer peer([first_lifetime](int fd) {
+        for (const auto lifetime : {first_lifetime, 60}) {
+            const auto request = parse_request(receive_payload(fd));
+            if (request.action != "authenticate") throw std::runtime_error("Expected login or refresh");
+            const auto expires = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count() + lifetime;
+            send_bytes(fd, encode_frame(make_response(request, {{"user_id", "1"}, {"expires_at", expires}}).dump()));
+        }
+        const auto ping = parse_request(receive_payload(fd));
+        send_bytes(fd, encode_frame(make_response(ping, {{"pong", true}}).dump()));
+    });
+    ConsoleProcess console(peer.port(), http.port(), false);
+    console.write("/login alice example-password\n");
+    console.read_until("Login expired. Use /login to authenticate again.", 5000);
+    console.write("/upload 2 " + path.string() + "\n");
+    console.read_until("Use /login before transferring files");
+    console.write("/login alice example-password\n/ping\n");
+    const auto& output = console.read_until("Disconnected.");
+    const auto first = output.find("Authenticated as user 1.");
+    REQUIRE(first != std::string::npos);
+    CHECK(output.find("Authenticated as user 1.", first + 1) != std::string::npos);
+    const auto expired = output.find("Login expired.");
+    CHECK(first < expired);
+    CHECK(output.find("Login expired.", expired + 1) == std::string::npos);
+    console.check();
+    peer.check();
+}
+
+TEST_CASE("Refreshing login replaces the previous expiry deadline", "[client][console][heartbeat][auth]") {
+    TestAuthServer http([](const httplib::Request&, httplib::Response& response) {
+        response.set_content(R"({"access_token":"test-token"})", "application/json");
+    });
+    TestPeer peer([](int fd) {
+        for (const auto lifetime : {3, 60}) {
+            const auto request = parse_request(receive_payload(fd));
+            const auto expires = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count() + lifetime;
+            send_bytes(fd, encode_frame(make_response(request, {{"user_id", "1"}, {"expires_at", expires}}).dump()));
+        }
+        for (int i = 0; i < 3; ++i) {
+            const auto request = parse_request(receive_payload(fd));
+            send_bytes(fd, encode_frame(make_response(request, {{"pong", true}}).dump()));
+        }
+    });
+    ConsoleProcess console(peer.port(), http.port(), false, 1, 2);
+    console.write("/login alice example-password\n");
+    console.read_until("Authenticated as user 1.");
+    console.write("/login alice example-password\n");
+    const auto& output = console.read_until("Disconnected.", 5000);
+    CHECK(output.find("Login expired.") == std::string::npos);
+    console.check();
+    peer.check();
+}
 
 TEST_CASE("Pending files clean up failures and never overwrite existing paths", "[client][file]") {
     TempDirectory directory;

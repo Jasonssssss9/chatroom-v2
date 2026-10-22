@@ -137,8 +137,12 @@ limit as request JSON. A MySQL lookup confirms that the user still exists.
 On success:
 
 ```json
-{"type":"response","request_id":"auth-1","action":"authenticate","ok":true,"data":{"user_id":"1"}}
+{"type":"response","request_id":"auth-1","action":"authenticate","ok":true,"data":{"user_id":"1","expires_at":2000000000}}
 ```
+
+`expires_at` is the verified JWT's expiration in Unix seconds. The console uses it
+for a local expiration reminder; the server remains responsible for authorization.
+Successful refresh replaces the previous deadline. See [Connection Keepalive](keepalive.md).
 
 After binding the session, the server queries unacknowledged deliveries on a
 worker and sends bounded batches of `message` notifications. The client must

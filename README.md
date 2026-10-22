@@ -59,6 +59,8 @@ See [Command-Line Client](docs/client.md) for commands and display options.
 See [Group Chat](docs/groups.md) for group commands, permissions, and delivery snapshots.
 See [File Transfers](docs/files.md) for storage configuration, schema migration,
 HTTP endpoints, console commands, and notification delivery.
+See [Connection Keepalive](docs/keepalive.md) for automatic heartbeats, idle cleanup,
+and login expiration reminders.
 
 ## Building
 
@@ -131,6 +133,7 @@ export CHATROOM_JWT_SECRET="$(openssl rand -hex 32)"
 ./build/server/chatroom_server
 ./build/server/chatroom_server --address 0.0.0.0 --port 8081 --workers 4
 ./build/server/chatroom_server --max-connections 512
+./build/server/chatroom_server --idle-timeout 90
 cp config/server.example.json config/server.json
 ./build/server/chatroom_server --config config/server.json
 ```
@@ -148,6 +151,11 @@ The default active-connection limit is 1024. Excess connections are closed; if
 accepting runs out of descriptors or socket memory, the Reactor retries after
 200 ms while continuing to serve established connections. Choose the connection
 limit with room for other file descriptors; it does not raise the OS limit.
+
+Idle TCP connections expire after 90 seconds without a complete incoming frame.
+The console sends a heartbeat every 30 seconds and waits up to 60 seconds for its
+pong. Both sides have configurable timeouts. Expired logins prompt `/login` again
+without closing a responsive connection. See [Connection Keepalive](docs/keepalive.md).
 
 Request admission defaults to 32 unfinished requests per connection and 1024 in
 total. Use `--max-requests-per-connection` and `--max-pending-requests`, or the JSON

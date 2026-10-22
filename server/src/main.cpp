@@ -42,6 +42,7 @@ int main(int argc, char* argv[]) {
                      "  --http-port NUMBER  HTTP port (default: 8080; 0 selects an available port)\n"
                      "  --http-workers N    HTTP worker thread count (default: 4)\n"
                      "  --max-connections N Maximum active connections (default: 1024)\n"
+                     "  --idle-timeout N    Idle TCP timeout in seconds (default: 90)\n"
                      "  --max-requests-per-connection N  Unfinished requests per client (default: 32)\n"
                      "  --max-pending-requests N         Unfinished requests in total (default: 1024)\n"
                      "  --log-level LEVEL   debug, info, warn, or error (default: info)\n"
@@ -60,6 +61,7 @@ int main(int argc, char* argv[]) {
                        {"worker_threads", config.worker_threads},
                        {"http_port", config.http.port}, {"http_workers", config.http.worker_threads},
                        {"max_connections", config.max_connections},
+                       {"idle_timeout_seconds", config.idle_timeout_seconds},
                        {"max_requests_per_connection", config.max_requests_per_connection},
                        {"max_pending_requests", config.max_pending_requests}});
         chatroom::initialize_mysql();
@@ -73,7 +75,8 @@ int main(int argc, char* argv[]) {
             chatroom::TokenService tokens(config.jwt_secret, config.token_lifetime_seconds);
             chatroom::AuthService auth(tokens);
             chatroom::RequestHandler handler(tokens, config.database);
-            chatroom::TcpServer server(config.port, config.address, config.max_connections);
+            chatroom::TcpServer server(config.port, config.address, config.max_connections,
+                                       std::chrono::seconds(config.idle_timeout_seconds));
             chatroom::RequestDispatcher dispatcher(
                 server, [&handler](chatroom::ConnectionId, const chatroom::Request& request,
                                    std::optional<chatroom::Session> session) {
@@ -96,6 +99,7 @@ int main(int argc, char* argv[]) {
                            {"worker_threads", config.worker_threads},
                            {"http_port", http.port()}, {"http_workers", config.http.worker_threads},
                            {"max_connections", config.max_connections},
+                           {"idle_timeout_seconds", config.idle_timeout_seconds},
                            {"max_requests_per_connection", config.max_requests_per_connection},
                            {"max_pending_requests", config.max_pending_requests}});
             phase = "runtime";

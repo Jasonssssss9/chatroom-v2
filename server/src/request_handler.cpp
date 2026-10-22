@@ -127,7 +127,8 @@ RequestResult RequestHandler::authenticate(const Request& request, std::optional
     if (!store.user_by_id(identity->user_id)) {
         return {make_error_response(request, "invalid_token", "Token is invalid or expired")};
     }
-    return {make_response(request, {{"user_id", std::to_string(identity->user_id)}}), identity};
+    const auto expires = std::chrono::duration_cast<std::chrono::seconds>(identity->expires_at.time_since_epoch()).count();
+    return {make_response(request, {{"user_id", std::to_string(identity->user_id)}, {"expires_at", expires}}), identity};
 }
 
 RequestResult RequestHandler::send_message(const Request& request, std::uint64_t sender) const {

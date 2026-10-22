@@ -67,6 +67,7 @@ TEST_CASE("The server starts with useful defaults and no credentials", "[config]
     CHECK(config.max_connections == 1024);
     CHECK(config.max_requests_per_connection == 32);
     CHECK(config.max_pending_requests == 1024);
+    CHECK(config.idle_timeout_seconds == 90);
     CHECK(config.log_level == LogLevel::info);
     CHECK(config.database.host == "127.0.0.1");
     CHECK(config.database.port == 3306);
@@ -79,6 +80,19 @@ TEST_CASE("The server starts with useful defaults and no credentials", "[config]
     CHECK(config.token_lifetime_seconds == 3600);
     CHECK(config.files.directory == "data/files");
     CHECK(config.files.max_size_bytes == 10485760);
+}
+
+TEST_CASE("Idle timeout uses JSON settings and CLI overrides", "[config][heartbeat]") {
+    TestEnvironment environment;
+    ConfigFile file(R"({"server":{"idle_timeout_seconds":120}})");
+    CHECK(load_config({"--config", file.path}).idle_timeout_seconds == 120);
+    CHECK(load_config({"--config", file.path, "--idle-timeout", "60"}).idle_timeout_seconds == 60);
+    for (const auto* value : {"0", "-1", "86401", "1.5", "text"}) {
+        CHECK_THROWS_AS(load_config({"--idle-timeout", value}), std::invalid_argument);
+        ConfigFile invalid(std::string(R"({"server":{"idle_timeout_seconds":)") +
+                           (std::string(value) == "text" ? "\"text\"" : value) + "}}");
+        CHECK_THROWS_AS(load_config({"--config", invalid.path}), std::invalid_argument);
+    }
 }
 
 TEST_CASE("File storage settings have explicit size and directory limits", "[config][file]") {

@@ -14,7 +14,7 @@
 | `TcpServer` | Runs the Reactor, manages connections, and invokes application callbacks |
 | `TcpClient` | Owns one blocking IPv4 connection and sends or receives complete frames |
 | `AuthClient` | Performs HTTP registration and login on the input thread |
-| `ConsoleClient` | Handles commands, reply display, ACKs, and receiver thread shutdown |
+| `ConsoleClient` | Handles commands, reply display, ACKs, heartbeats, and thread shutdown |
 
 The implementation uses Linux socket APIs directly. Server sockets are non-blocking
 and close on exec. ET handlers accept, read, or write until `EAGAIN`; `EINTR` retries
@@ -46,7 +46,8 @@ accept loop. `EAGAIN` ends the current batch. If `accept4()` reports `EMFILE`,
 listener from epoll, and schedules another attempt after 200 ms. Other errors still
 leave `run()` as exceptions.
 
-The Reactor uses an `epoll_wait()` timeout while accepting is paused. It continues
+The Reactor uses the nearest idle-scan or accept-retry deadline for `epoll_wait()`.
+It continues
 to process established connections, completions, and `stop()` notifications; it
 does not sleep or start a timer thread. The deadline is checked after every wait,
 including waits that return other events. At the deadline it restores the listener
@@ -151,6 +152,11 @@ uses `shutdown(SHUT_RDWR)` to cancel blocked I/O without closing a descriptor th
 another thread is using. Join I/O threads before destroying the client. Create a
 new instance to reconnect. Connection establishment is blocking and uses the
 operating system's timeout; hostnames and automatic reconnect are not implemented.
+
+TCP sends have a five-second socket timeout. The console's timer sends automatic
+pings independently of input and HTTP operations and cancels TCP on a missing
+matching pong. A periodic Reactor scan closes idle connections without an extra
+server thread. See [Connection Keepalive](keepalive.md) for both timeouts.
 
 The console limits each input line to 64 KiB before JSON validation and sending.
 LF and an optional preceding CR do not count toward that limit. On overflow it

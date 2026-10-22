@@ -22,7 +22,8 @@ public:
     using DisconnectHandler = std::function<void(ConnectionId)>;
 
     explicit TcpServer(std::uint16_t port = 8081, const std::string& address = "127.0.0.1",
-                       std::size_t max_connections = 1024);
+                       std::size_t max_connections = 1024,
+                       std::chrono::milliseconds idle_timeout = std::chrono::seconds(90));
 
     void set_message_handler(MessageHandler handler);
     void set_disconnect_handler(DisconnectHandler handler);
@@ -62,6 +63,7 @@ private:
     void process_callbacks();
     void handle_event(ConnectionId id, std::uint32_t events);
     void update_connection(ConnectionId id);
+    void close_idle_connections();
     void cleanup();
 
     Socket listener_;
@@ -69,6 +71,7 @@ private:
     UniqueFd wakeup_fd_;
     std::unordered_map<ConnectionId, TcpConnection> connections_;
     std::size_t max_connections_;
+    std::chrono::milliseconds idle_timeout_;
     // The listener is removed from epoll while a resource-exhaustion retry is pending.
     std::optional<std::chrono::steady_clock::time_point> accept_retry_at_;
     ConnectionId next_id_ = 3;

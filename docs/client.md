@@ -10,6 +10,7 @@ TCP authentication. The JWT stays in memory and is not displayed or saved.
 ./build/client/chatroom_client
 ./build/client/chatroom_client 127.0.0.1 8081 8080
 ./build/client/chatroom_client --json 127.0.0.1 8081 8080
+./build/client/chatroom_client --heartbeat-interval 30 --heartbeat-timeout 60
 ./build/client/chatroom_client --help
 ```
 
@@ -18,6 +19,11 @@ Defaults are `127.0.0.1`, `8081`, and `8080`. Both ports must be between 1 and
 65535. HTTP and TCP use the same server address. The server must be running;
 the client opens its TCP connection at startup. The client requires no database
 credentials or JWT signing secret.
+
+The console sends automatic heartbeats, with a 30-second interval and a 60-second
+pong timeout. The two heartbeat options accept integer seconds from 1 to 3600.
+They can appear before or after the positional arguments. Keep the interval below
+the server's idle timeout. See [Connection Keepalive](keepalive.md).
 
 ## Commands
 
@@ -138,10 +144,17 @@ ten-second total request limit. Unexpected TCP failures end the client.
 Message text and errors escape control characters so a newline or escape byte
 cannot overwrite terminal output. UTF-8 text remains readable.
 
-If a token expires, use `/login` again for the same user. To switch accounts,
+The console reports JWT expiration once and clears its HTTP file token. Use
+`/login` again for the same user. To switch accounts,
 quit and reconnect; the server does not permit changing users on one connection.
 A second login on another connection replaces the first one. There is no
 automatic reconnection. See [Authentication](authentication.md).
+
+A missing matching pong cancels blocked TCP I/O and exits with a heartbeat-timeout
+error. Server EOF prints a reconnection hint without waiting for terminal input.
+Automatic pongs are hidden in normal output; `/ping` remains visible. The timer
+continues while HTTP operations block the input thread, and connection loss
+cancels in-flight HTTP requests. TCP socket sends time out after five seconds.
 
 Use `/quit` for immediate cancellation. Stdin EOF sends FIN and waits for final
 server output. After that half-close the client displays notifications without

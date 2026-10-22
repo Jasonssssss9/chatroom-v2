@@ -89,6 +89,9 @@ void read_file(ServerConfig& config, const std::string& path) {
         config.max_pending_requests = read_number(server.at("max_pending_requests"),
             "server.max_pending_requests", 1, std::numeric_limits<std::size_t>::max());
     }
+    if (server.contains("idle_timeout_seconds")) {
+        config.idle_timeout_seconds = read_number(server.at("idle_timeout_seconds"), "server.idle_timeout_seconds", 1, 86400);
+    }
     const auto http = section(document, "http");
     if (http.contains("port")) config.http.port = read_number(http.at("port"), "http.port", 0, 65535);
     if (http.contains("worker_threads")) {
@@ -137,7 +140,7 @@ ServerConfig load_config(const std::vector<std::string_view>& arguments) {
         if (option != "--config" && option != "--address" && option != "--port" &&
             option != "--workers" && option != "--max-connections" &&
             option != "--max-requests-per-connection" && option != "--max-pending-requests" &&
-            option != "--http-port" && option != "--http-workers" && option != "--log-level") {
+            option != "--http-port" && option != "--http-workers" && option != "--log-level" && option != "--idle-timeout") {
             throw std::invalid_argument("Unknown option: " + std::string(option));
         }
         if (i + 1 == arguments.size()) {
@@ -155,6 +158,7 @@ ServerConfig load_config(const std::vector<std::string_view>& arguments) {
         const auto value = arguments[i + 1];
         if (option == "--address") config.address = value;
         if (option == "--port") config.port = parse_number(value, "--port", 0, 65535);
+        if (option == "--idle-timeout") config.idle_timeout_seconds = parse_number(value, "--idle-timeout", 1, 86400);
         if (option == "--http-port") config.http.port = parse_number(value, "--http-port", 0, 65535);
         if (option == "--http-workers") {
             config.http.worker_threads = parse_number(value, "--http-workers", 1,

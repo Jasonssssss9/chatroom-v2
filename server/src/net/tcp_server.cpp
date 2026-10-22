@@ -38,12 +38,16 @@ bool retry_accept_error(int error) {
 }
 } // namespace
 
-TcpServer::TcpServer(std::uint16_t port, const std::string& address, std::size_t max_connections)
+TcpServer::TcpServer(std::uint16_t port, const std::string& address, std::size_t max_connections,
+                     std::chrono::milliseconds idle_timeout)
     : listener_(Socket::listen_on(address, port)),
       wakeup_fd_(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)),
-      max_connections_(max_connections) {
+      max_connections_(max_connections), idle_timeout_(idle_timeout) {
     if (max_connections_ == 0) {
         throw std::invalid_argument("Maximum connections must be positive");
+    }
+    if (idle_timeout_ <= std::chrono::milliseconds::zero() || idle_timeout_ > std::chrono::hours(24)) {
+        throw std::invalid_argument("Idle timeout must be positive and at most 24 hours");
     }
     if (wakeup_fd_.get() < 0) {
         throw std::system_error(errno, std::generic_category(), "eventfd");
@@ -281,13 +285,29 @@ void TcpServer::close_connection(ConnectionId id, std::string_view reason) {
     }
 }
 
+void TcpServer::close_idle_connections() {
+    const auto now = std::chrono::steady_clock::now();
+    std::vector<ConnectionId> expired;
+    for (const auto& [id, connection] : connections_) {
+        if (now - connection.last_activity() >= idle_timeout_) expired.push_back(id);
+    }
+    for (const auto id : expired) close_connection(id, "idle_timeout");
+}
+
 void TcpServer::run(int shutdown_signal_fd) {
     std::array<epoll_event, 64> events;
+    // A small periodic scan shares epoll's existing timeout with accept retries.
+    const auto scan_interval = std::min(idle_timeout_, std::chrono::milliseconds(1000));
+    auto next_idle_check = std::chrono::steady_clock::now() + scan_interval;
     try {
         if (shutdown_signal_fd >= 0) {
             epoll_.add(shutdown_signal_fd, kShutdownSignal, EPOLLIN);
         }
         while (!stopped_) {
+            if (std::chrono::steady_clock::now() >= next_idle_check) {
+                close_idle_connections();
+                next_idle_check = std::chrono::steady_clock::now() + scan_interval;
+            }
             if (accept_retry_at_ && std::chrono::steady_clock::now() >= *accept_retry_at_) {
                 epoll_.add(listener_.fd(), kListener, EPOLLIN | EPOLLET);
                 accept_retry_at_.reset();
@@ -295,12 +315,9 @@ void TcpServer::run(int shutdown_signal_fd) {
                 // Retry explicitly: the pending connection may have no new ET notification.
                 accept_connections();
             }
-            int timeout_ms = -1;
-            if (accept_retry_at_) {
-                const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(
-                    *accept_retry_at_ - std::chrono::steady_clock::now());
-                timeout_ms = std::max(0, static_cast<int>(remaining.count()));
-            }
+            const auto deadline = accept_retry_at_ ? std::min(next_idle_check, *accept_retry_at_) : next_idle_check;
+            const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+            const int timeout_ms = std::max(0, static_cast<int>(remaining.count()));
             const int count = epoll_.wait(events.data(), static_cast<int>(events.size()), timeout_ms);
             for (int i = 0; i < count && !stopped_; ++i) {
                 const auto id = events[i].data.u64;

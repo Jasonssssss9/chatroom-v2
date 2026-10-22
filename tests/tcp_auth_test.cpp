@@ -196,7 +196,12 @@ TEST_CASE("HTTP tokens authenticate TCP sessions and successful login replaces t
     // Queue both requests before receiving either response.
     first.send("authenticate", {{"token", token}, {"user_id", "999999"}});
     first.send("unknown");
-    CHECK(first.receive()["data"]["user_id"] == user_id);
+    const auto authenticated = first.receive();
+    CHECK(authenticated["data"]["user_id"] == user_id);
+    const auto identity = running.tokens.verify(token.get<std::string>());
+    REQUIRE(identity);
+    CHECK(authenticated["data"]["expires_at"] == std::chrono::duration_cast<std::chrono::seconds>(
+        identity->expires_at.time_since_epoch()).count());
     CHECK(first.receive()["error"]["code"] == "unknown_action");
 
     // Invalid refreshes keep the existing identity.

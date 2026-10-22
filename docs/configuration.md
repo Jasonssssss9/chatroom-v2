@@ -40,6 +40,7 @@ fields are ignored. The root and each supplied section must be JSON objects.
 | `server.max_connections` | `1024` | Positive integer limit on active TCP connections |
 | `server.max_requests_per_connection` | `32` | Positive integer limit on unfinished requests per connection |
 | `server.max_pending_requests` | `1024` | Positive integer limit on unfinished requests across all connections |
+| `server.idle_timeout_seconds` | `90` | Idle TCP timeout, from 1 to 86400 seconds |
 | `database.host` | `127.0.0.1` | MySQL host name or address |
 | `database.port` | `3306` | MySQL port, from 1 to 65535 |
 | `database.name` | `chatroom` | Database name |
@@ -67,6 +68,7 @@ falling back to a default.
 | `--http-port NUMBER` | Override `http.port` |
 | `--http-workers NUMBER` | Override `http.worker_threads` |
 | `--max-connections NUMBER` | Override `server.max_connections` |
+| `--idle-timeout NUMBER` | Override `server.idle_timeout_seconds` |
 | `--max-requests-per-connection NUMBER` | Override `server.max_requests_per_connection` |
 | `--max-pending-requests NUMBER` | Override `server.max_pending_requests` |
 | `--log-level LEVEL` | Override `log.level` |
@@ -161,6 +163,9 @@ with `connection_opened` to find the peer. Connection IDs are unique within one
 server process. Successful requests are logged only at `debug` to keep ordinary
 traffic quiet. The configured threshold applies to every event, including startup
 and connection events.
+
+Idle cleanup logs `connection_closed` with reason `idle_timeout`. The configured
+timeout also appears in the startup logs. See [Connection Keepalive](keepalive.md).
 
 Logs do not include configuration dumps, database passwords, JWT secrets, tokens,
 or request bodies. Handler exceptions should also avoid including credentials in

@@ -4,6 +4,7 @@
 #include "net/socket.h"
 
 #include <cstdint>
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,7 @@ public:
     bool close_deferred() const noexcept { return close_deferred_; }
     void set_close_deferred(bool deferred) noexcept { close_deferred_ = deferred; }
     bool has_pending_output() const noexcept { return sent_ < output_.size(); }
+    auto last_activity() const noexcept { return last_activity_; }
     std::uint32_t events() const noexcept;
 
 private:
@@ -48,6 +50,7 @@ private:
     bool read_closed_ = false;
     bool truncated_frame_ = false;
     bool close_deferred_ = false;
+    std::chrono::steady_clock::time_point last_activity_ = std::chrono::steady_clock::now();
 };
 
 } // namespace chatroom

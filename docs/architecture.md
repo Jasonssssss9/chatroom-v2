@@ -43,7 +43,7 @@ with per-connection ordering and completions returned to the Reactor. The execut
 implements `ping`, `authenticate`, `send_message`, `ack_message`, and
 correlated protocol errors. Catch2 covers framing, request validation, handlers,
 connection I/O, and TCP integration. The command-line client uses a blocking TCP
-connection with separate input and receive threads. Its library and tests can be
+connection with an input thread, a receiver, and a small heartbeat timer. Its library and tests can be
 built without the server. See [Networking](networking.md), [JSON Protocol](protocol.md),
 and [Worker Pool and Request Handoff](threading.md).
 
@@ -59,7 +59,10 @@ The Reactor pauses and retries accepting
 when descriptors or socket memory are exhausted, while serving existing clients.
 Database settings and JWT secrets can be supplied through
 environment variables. Startup, connections, and request failures use a shared
-JSON logger. See [Configuration and Logging](configuration.md).
+JSON logger. The Reactor also scans for idle TCP connections using its epoll
+timeout. The console sends periodic pings and reports JWT expiry without adding
+a server timer thread. See [Configuration and Logging](configuration.md) and
+[Connection Keepalive](keepalive.md).
 
 MySQL persistence is implemented through the C API, with prepared statements,
 RAII connections and transactions, and concrete operations for users, groups,

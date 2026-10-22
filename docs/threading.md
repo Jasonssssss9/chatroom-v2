@@ -14,6 +14,13 @@ successful uploads post a short `UserNotification` callback through `TcpServer::
 Only the Reactor calls `RequestDispatcher::notify()` to resolve online sessions.
 File notices share the existing ACK/replay window. See [File Transfers](files.md).
 
+The client's receiver and heartbeat timer are joined threads. Its send mutex
+serializes terminal requests, automatic ACKs, heartbeats, and the EOF half-close;
+a separate state mutex protects pending pings, tokens, and the login deadline.
+No state lock is held during a socket write. Shutdown wakes the timer before
+joining, and receiver termination cancels in-flight HTTP calls. See
+[Connection Keepalive](keepalive.md).
+
 ## Responsibilities
 
 | Component | Responsibility |

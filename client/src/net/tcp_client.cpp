@@ -24,6 +24,11 @@ TcpClient::TcpClient(const std::string& address, std::uint16_t port)
     if (::connect(socket_.get(), reinterpret_cast<const sockaddr*>(&peer), sizeof(peer)) < 0) {
         throw std::system_error(errno, std::generic_category(), "connect");
     }
+    // Keep a blocked sender from preventing heartbeat cancellation indefinitely.
+    const timeval timeout{5, 0};
+    if (::setsockopt(socket_.get(), SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0) {
+        throw std::system_error(errno, std::generic_category(), "setsockopt(SO_SNDTIMEO)");
+    }
 }
 
 void TcpClient::send(std::string_view payload) {

@@ -17,6 +17,7 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <poll.h>
 #include <pthread.h>
 #include <sstream>
 #include <sys/resource.h>
@@ -38,8 +39,8 @@ public:
     TcpServer server;
     std::unique_ptr<RequestDispatcher> dispatcher;
 
-    explicit RunningServer(std::size_t max_connections = 1024)
-        : server(0, "127.0.0.1", max_connections) {
+    explicit RunningServer(std::size_t max_connections = 1024, std::chrono::milliseconds idle_timeout = 90s)
+        : server(0, "127.0.0.1", max_connections, idle_timeout) {
         server.set_message_handler([this](ConnectionId id, std::string payload) {
             server.send(id, payload);
         });
@@ -302,6 +303,62 @@ void run_signal_server(int control) {
     log(LogLevel::info, "test_server_stopped");
 }
 } // namespace
+
+TEST_CASE("Idle peers expire while complete frames keep another connection alive", "[server][heartbeat]") {
+    LogCapture logs;
+    RunningServer fixture(1024, 400ms);
+    fixture.start();
+    auto silent = connect_client(fixture.server.port());
+    auto active = connect_client(fixture.server.port());
+    bool expired = false;
+    for (int i = 0; i < 15 && !expired; ++i) {
+        send_all(active.get(), encode_frame("alive"));
+        CHECK(receive_frame(active.get()) == "alive");
+        // An unfinished header is not a complete application frame.
+        if (i < 3) send_all(silent.get(), std::string(1, '\0'));
+        pollfd event{silent.get(), POLLIN, 0};
+        if (::poll(&event, 1, 100) > 0) {
+            expect_closed(silent.get());
+            expired = true;
+        }
+    }
+    CHECK(expired);
+    send_all(active.get(), encode_frame("still alive"));
+    CHECK(receive_frame(active.get()) == "still alive");
+    fixture.check();
+    CHECK(logs.output.str().find("idle_timeout") != std::string::npos);
+}
+
+TEST_CASE("Idle cleanup removes a session even while its worker is busy", "[server][heartbeat][session]") {
+    RunningServer fixture(1024, 150ms);
+    TaskGate gate;
+    std::promise<void> started;
+    auto ready = started.get_future();
+    fixture.use_session_workers([&, wait = gate.future](ConnectionId, const Request& request, std::optional<Session>) {
+        if (request.action == "authenticate") {
+            return RequestResult{make_response(request), Session{7, std::chrono::system_clock::now() + 1h}};
+        }
+        if (request.action == "blocked") { started.set_value(); wait.wait(); }
+        return RequestResult{make_response(request)};
+    }, 1);
+    fixture.start();
+    auto client = connect_client(fixture.server.port());
+    send_all(client.get(), encode_frame(R"({"type":"request","request_id":"a","action":"authenticate"})"));
+    REQUIRE(nlohmann::json::parse(receive_frame(client.get()))["ok"] == true);
+    send_all(client.get(), encode_frame(R"({"type":"request","request_id":"b","action":"blocked"})"));
+    REQUIRE(ready.wait_for(2s) == std::future_status::ready);
+    expect_closed(client.get());
+    std::promise<bool> bound;
+    auto binding = bound.get_future();
+    fixture.server.post([&] { bound.set_value(fixture.dispatcher->sessions().connection_for(7).has_value()); });
+    REQUIRE(binding.wait_for(2s) == std::future_status::ready);
+    CHECK_FALSE(binding.get());
+    gate.release();
+    auto next = connect_client(fixture.server.port());
+    send_all(next.get(), encode_frame(R"({"type":"request","request_id":"new","action":"ping"})"));
+    CHECK(nlohmann::json::parse(receive_frame(next.get()))["request_id"] == "new");
+    fixture.check();
+}
 
 TEST_CASE("Shutdown signals stop the Reactor and wait for submitted work", "[server][shutdown]") {
     int signal_number = SIGINT;
