@@ -20,6 +20,7 @@ Alice sees `Created group 42.` Bob sees
 `Added to group 42: Study group (owner 1).` Use the actual group ID:
 
 ```text
+/groups
 /members 42
 /send_group 42 Hello everyone
 ```
@@ -37,12 +38,58 @@ second copy of their own group message.
 
 Add more users at creation with `/create_group "Study group" 2,3`, or create an
 owner-only group with `/create_group Notes`. Membership is chosen at creation.
-Keep the group ID: names need not be unique. Online members receive the creation
-notice, and offline members can obtain the ID from a later group message or the
-creator. Group creation notices are live events, rather than persisted message
+Names need not be unique; `/groups` returns their IDs and owners. Online members
+receive the creation notice. Members who were offline can log in and run `/groups`
+to discover their groups even when no group messages have been sent.
+Group creation notices are live events, rather than persisted message
 deliveries, and do not have ACKs or offline replay.
 
 ## TCP Operations
+
+### list_groups
+
+```json
+{"type":"request","request_id":"groups-1","action":"list_groups","data":{}}
+```
+
+The authenticated user comes from the session; a supplied `user_id` is ignored.
+The result contains only groups the user currently belongs to, including groups
+they created. Each entry contains the group ID, owner ID, and name:
+
+```json
+{"type":"response","request_id":"groups-1","action":"list_groups","ok":true,"data":{"groups":[{"group_id":"42","owner_id":"1","name":"Study group"}],"next_after_group_id":null}}
+```
+
+Groups are ordered by ascending ID. Each page contains at most 64 entries, so
+even maximum-length names requiring JSON escaping fit the 64 KiB frame limit.
+The database query reads at most 65 rows to determine whether another page exists.
+The response does not fetch members or user records for each group.
+
+When another page exists, `next_after_group_id` is the last returned group ID.
+Send it as `data.after_group_id` to continue:
+
+```json
+{"type":"request","request_id":"groups-2","action":"list_groups","data":{"after_group_id":"42"}}
+```
+
+The optional cursor uses the same positive unsigned 64-bit decimal string format
+as other IDs. It is exclusive: only larger IDs are returned. Omit it for the first
+page; malformed cursors receive `invalid_request`. Empty results return
+`{"groups":[],"next_after_group_id":null}`. Missing or expired sessions receive
+`authentication_required`.
+
+The console command is `/groups [after-group-id]`. It displays `No groups.` for
+an empty page, or the IDs, names, and owners:
+
+```text
+Your groups:
+  42: Study group (owner 1).
+```
+
+When a full page has more results, the console also prints
+`Next page: /groups <last-group-id>`. Run that command to continue, or run `/groups`
+again to refresh from the beginning. Each query reads current memberships rather
+than keeping a cached list or a snapshot across pages.
 
 ### create_group
 
@@ -137,10 +184,13 @@ socket access and online routing remain on the Reactor.
 
 ## Verification
 
-Tests cover creation, missing users, owner-only groups, the 64-member limit,
+Tests cover discovering groups created while offline, membership isolation,
+reconnection, cursor validation, pagination boundaries, fully escaped names,
+creation, missing users, owner-only groups, the 64-member limit,
 permission checks, two-way group broadcast, ignored ownership/recipient fields,
 offline replay, ACKs, conflicts, and retries after membership changes.
-Console tests cover all three commands, group notices, display, deduplication,
+Console tests cover group commands, empty and paginated lists, escaped output,
+group notices, display, deduplication,
 and automatic ACKs.
 
 ```bash

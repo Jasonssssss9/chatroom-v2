@@ -93,6 +93,7 @@ RequestResult RequestHandler::handle(const Request& request, std::optional<Sessi
         }
         if (request.action == "create_group") return create_group(request, session->user_id);
         if (request.action == "get_group_members") return group_members(request, session->user_id);
+        if (request.action == "list_groups") return list_groups(request, session->user_id);
         if (request.action == "ack_message") return acknowledge_message(request, session->user_id);
         return {make_error_response(request, "unknown_action", "Action is not supported")};
     } catch (const ProtocolError& error) {
@@ -193,6 +194,23 @@ RequestResult RequestHandler::group_members(const Request& request, std::uint64_
         return {make_error_response(request, "not_group_member", "Group does not exist or you are not a member")};
     }
     return {make_response(request, {{"group_id", std::to_string(group)}, {"members", id_strings(members)}})};
+}
+
+RequestResult RequestHandler::list_groups(const Request& request, std::uint64_t user) const {
+    // Even 64 fully escaped 128-byte names fit within one 64 KiB response.
+    constexpr std::size_t page_size = 64;
+    const auto after = request.data.contains("after_group_id") ? require_id(request, "after_group_id") : 0;
+    ChatStore store(database());
+    auto groups = store.groups_for_user(user, after, page_size + 1);
+    const bool more = groups.size() > page_size;
+    if (more) groups.pop_back();
+    auto values = nlohmann::json::array();
+    for (const auto& group : groups) {
+        values.push_back({{"group_id", std::to_string(group.id)}, {"owner_id", std::to_string(group.owner_id)},
+                          {"name", group.name}});
+    }
+    return {make_response(request, {{"groups", std::move(values)},
+        {"next_after_group_id", more ? nlohmann::json(std::to_string(groups.back().id)) : nlohmann::json(nullptr)}})};
 }
 
 RequestResult RequestHandler::acknowledge_message(const Request& request, std::uint64_t recipient) const {

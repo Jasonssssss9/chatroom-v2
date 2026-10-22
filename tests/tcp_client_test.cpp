@@ -515,12 +515,43 @@ TEST_CASE("Invalid console commands leave the connection usable", "[client][cons
     ConsoleProcess console(peer.port(), 8080, false);
     console.write("/help\n/unknown\n/login alice\n/register \"unfinished\n/send 0 Hello\n/send 8, Hello\n/ping extra\n");
     console.write("/create_group\n/create_group \"\"\n/create_group Study 0\n/members 0\n/members 1 extra\n/send_group 01 Hello\n/send_group 1\n");
+    console.write("/groups 0\n/groups 01\n/groups -1\n/groups 18446744073709551616\n/groups 1 extra\n");
     console.write("/send 8 " + std::string(4097, 'x') + "\n/ping\n");
     const auto& output = console.read_until("Disconnected.");
     CHECK(output.find("Commands:") != std::string::npos);
     CHECK(output.find("Unknown command") != std::string::npos);
     CHECK(output.find("Usage: /login") != std::string::npos);
     CHECK(output.find("Pong.") != std::string::npos);
+    console.check();
+    peer.check();
+}
+
+TEST_CASE("Console lists empty and paginated groups with readable escaped names", "[client][console][group]") {
+    TestPeer peer([](int fd) {
+        const auto empty = parse_request(receive_payload(fd));
+        if (empty.action != "list_groups" || !empty.data.empty()) throw std::runtime_error("Incorrect group list command");
+        send_bytes(fd, encode_frame(make_response(empty, {{"groups", nlohmann::json::array()}, {"next_after_group_id", nullptr}}).dump()));
+        const auto first = parse_request(receive_payload(fd));
+        if (first.action != "list_groups" || !first.data.empty()) throw std::runtime_error("Incorrect first page command");
+        const auto groups = nlohmann::json::array({{{"group_id", "42"}, {"owner_id", "7"}, {"name", "Study\n\x1bgroup"}}});
+        send_bytes(fd, encode_frame(make_response(first, {{"groups", groups}, {"next_after_group_id", "42"}}).dump()));
+        const auto next = parse_request(receive_payload(fd));
+        if (next.action != "list_groups" || next.data != nlohmann::json{{"after_group_id", "42"}}) {
+            throw std::runtime_error("Incorrect next page command");
+        }
+        send_bytes(fd, encode_frame(make_response(next, {{"groups", nlohmann::json::array({
+            {{"group_id", "50"}, {"owner_id", "8"}, {"name", "Friends"}}})}, {"next_after_group_id", nullptr}}).dump()));
+    });
+    ConsoleProcess console(peer.port(), 8080, false);
+    console.write("/groups\n");
+    console.read_until("No groups.");
+    console.write("/groups\n");
+    console.read_until("Next page: /groups 42");
+    console.write("/groups 42\n");
+    const auto& output = console.read_until("Disconnected.");
+    CHECK(output.find("42: Study\\n\\u001bgroup (owner 7).") != std::string::npos);
+    CHECK(output.find("50: Friends (owner 8).") != std::string::npos);
+    CHECK(output.find('\x1b') == std::string::npos);
     console.check();
     peer.check();
 }

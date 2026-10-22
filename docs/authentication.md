@@ -154,7 +154,7 @@ Session rules are deliberately small:
 - `ping` and `authenticate` are available before authentication. Every other
   action requires an unexpired session; otherwise it receives
   `authentication_required`. Authenticated users can send messages, create groups,
-  query their groups' members, and acknowledge deliveries. Group queries and
+  list their groups, query members, and acknowledge deliveries. Group queries and
   sends also require current membership;
   unimplemented actions receive `unknown_action`.
 - Each user has one online TCP connection. When a new authentication succeeds,

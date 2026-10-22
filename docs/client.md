@@ -27,6 +27,7 @@ credentials or JWT signing secret.
 | `/login <username> <password>` | Log in over HTTP and authenticate this TCP connection |
 | `/send <id[,id...]> <text>` | Send a private or multi-recipient message |
 | `/create_group <name> [id,...]` | Create a group containing yourself and selected users |
+| `/groups [after-group-id]` | List your groups, up to 64 per page |
 | `/members <group-id>` | Query the members of a group you belong to |
 | `/send_group <group-id> <text>` | Send a message to every other member |
 | `/upload <id[,id...]> <path>` | Upload a file for selected users |
@@ -86,16 +87,22 @@ For group chat:
 
 ```text
 /create_group "Study group" 2,3
+/groups
 /members 42
 /send_group 42 Hello everyone
 ```
 
-Use the ID returned by creation. The creator is included automatically, and the
-group may contain at most 64 members in total. Quote a group name containing
+Use the ID returned by creation or `/groups`. The creator is included automatically,
+and the group may contain at most 64 members in total. Quote a group name containing
 spaces; its limit is 128 UTF-8 bytes. Group messages use the same 4096-byte text
 limit and are displayed with both group and message IDs. Online members receive
 a group creation notice. See [Group Chat](groups.md) for a complete walkthrough,
 permission checks, and retry behavior.
+
+`/groups` lists only your current groups, including groups created while you were
+offline. Each row shows the ID, name, and owner. An empty list prints `No groups.`
+When more than 64 groups match, follow the displayed `Next page: /groups <id>`
+command. Running `/groups` without a cursor refreshes the first page.
 
 For files, wait for TCP login to succeed, then use:
 

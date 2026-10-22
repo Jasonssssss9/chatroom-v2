@@ -15,10 +15,10 @@ The server currently supports:
 - Consistent errors for malformed JSON, invalid requests, and unsupported actions.
 - Server-initiated `message`, `group_created`, and `file_available` notifications.
 - Recipient acknowledgments and bounded replay after authentication.
-- Group creation, member queries, and persisted group broadcasts.
+- Group creation, membership-based group listings, member queries, and persisted group broadcasts.
 
 The implemented actions are `ping`, `authenticate`, `send_message`, `ack_message`,
-`create_group`, `get_group_members`, and `send_group_message`.
+`create_group`, `list_groups`, `get_group_members`, and `send_group_message`.
 HTTP file transfers are implemented separately from TCP frames. See [File Transfers](files.md).
 
 ## 2. Framing
@@ -326,6 +326,25 @@ Other online members receive a `group_created` notification containing `group_id
 An empty member list creates an owner-only group. Duplicate names are allowed;
 group IDs identify groups. A missing member receives `invalid_recipient`.
 
+### list_groups
+
+```json
+{"type":"request","request_id":"groups-1","action":"list_groups","data":{}}
+```
+
+Lists only the session user's current groups. Success response data is:
+
+```json
+{"groups":[{"group_id":"42","owner_id":"1","name":"Study group"}],"next_after_group_id":null}
+```
+
+Each page contains at most 64 entries in ascending group-ID order. If there are
+more, `next_after_group_id` contains the last returned ID; pass it in the next
+request as `data.after_group_id`. The cursor is exclusive and uses a canonical
+positive unsigned 64-bit string. Omit it for the first page. An empty page has an
+empty `groups` array and a null next cursor. A supplied `user_id` does not select
+another user's groups. See [Group Chat](groups.md#list_groups) for examples.
+
 ### get_group_members
 
 ```json
@@ -446,7 +465,7 @@ features while assigning readable operation names and the appropriate transport.
 
 HTTP registration, login, TCP authentication, and direct or multi-recipient sends
 are implemented. See [Authentication](authentication.md) and [Messaging](messaging.md).
-Group creation, member queries, and group messages are also implemented.
+Group creation, group listings, member queries, and group messages are also implemented.
 HTTP file upload/download and persisted file notifications are implemented.
 Logout remains planned. See [Group Chat](groups.md) and [File Transfers](files.md).
 
@@ -469,6 +488,7 @@ The action data is intentionally small:
 | `authenticate` (implemented) | `token` |
 | `send_message` (implemented) | `client_message_id`, `recipients` (array of user ID strings), `text` |
 | `create_group` (implemented) | `name`, optional `members` (array of user ID strings) |
+| `list_groups` (implemented) | Optional `after_group_id` for the next page |
 | `get_group_members` (implemented) | `group_id` |
 | `send_group_message` (implemented) | `client_message_id`, `group_id`, `text` |
 | `ack_message` (implemented) | `message_id` |

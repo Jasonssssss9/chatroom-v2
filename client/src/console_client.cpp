@@ -21,6 +21,7 @@ const char* kHelp = "Commands:\n"
     "  /login <username> <password>     Log in and authenticate TCP\n"
     "  /send <id[,id...]> <text>        Send a message to user IDs\n"
     "  /create_group <name> [id,...]    Create a group, including yourself\n"
+    "  /groups [after-group-id]         List your groups, up to 64 per page\n"
     "  /members <group-id>             List the group's members\n"
     "  /send_group <group-id> <text>    Send a group message\n"
     "  /upload <id[,id...]> <path>      Upload a file for selected users\n"
@@ -106,6 +107,21 @@ std::string format_message(const nlohmann::json& message) {
         if (action == "send_group_message") return "Sent message " + visible(field(*data, "message_id")) +
             " to group " + visible(field(*data, "group_id")) + ".";
         if (action == "create_group") return "Created group " + visible(field(*data, "group_id")) + ".";
+        if (action == "list_groups") {
+            const auto groups = data->find("groups");
+            if (groups != data->end() && groups->is_array()) {
+                std::string text = groups->empty() ? "No groups." : "Your groups:";
+                for (const auto& group : *groups) {
+                    if (!group.is_object() || field(group, "group_id").empty() ||
+                        field(group, "owner_id").empty() || field(group, "name").empty()) return "Server: " + message.dump();
+                    text += "\n  " + visible(field(group, "group_id")) + ": " + visible(field(group, "name")) +
+                            " (owner " + visible(field(group, "owner_id")) + ").";
+                }
+                const auto next = field(*data, "next_after_group_id");
+                if (!next.empty()) text += "\nNext page: /groups " + visible(next);
+                return text;
+            }
+        }
         if (action == "get_group_members") {
             const auto members = data->find("members");
             if (members != data->end() && members->is_array()) {
@@ -260,6 +276,14 @@ bool ConsoleClient::handle_command(std::string_view line) {
         if (input >> extra) throw std::invalid_argument("Quote group names containing spaces");
         if (name.empty() || name.size() > 128) throw std::invalid_argument("Group name must contain 1 to 128 bytes");
         send_request("create_group", {{"name", name}, {"members", parse_ids(members)}});
+    } else if (command == "/groups") {
+        std::string after;
+        auto data = nlohmann::json::object();
+        if (input >> after) {
+            if (!valid_id(after) || (input >> extra)) throw std::invalid_argument("Usage: /groups [after-group-id]");
+            data["after_group_id"] = after;
+        }
+        send_request("list_groups", std::move(data));
     } else if (command == "/members") {
         std::string group;
         if (!(input >> group) || !valid_id(group) || (input >> extra)) {

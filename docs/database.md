@@ -132,6 +132,11 @@ containing only its sender can persist a message without deliveries. The TCP
 handler bounds groups to 64 members and uses the returned delivery snapshot for
 broadcast. See [Group Chat](groups.md).
 
+`groups_for_user()` joins memberships to groups and returns only ID, owner ID,
+and name, ordered by group ID after an exclusive cursor. The application asks for
+at most 65 rows and returns pages of 64 groups. There is no per-group member or
+user lookup, cache, or schema migration for listings.
+
 Direct and group sends save the message and recipients in one transaction. A
 failed recipient insert rolls back the whole operation. Direct sends require at
 least one recipient and collapse duplicate recipient IDs.

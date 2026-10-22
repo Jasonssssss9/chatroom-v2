@@ -21,8 +21,9 @@ and JWT issuance are implemented. TCP verifies JWTs and binds users to connectio
 with one online connection per user. Private messages and multi-recipient sends
 are persisted before online notifications. Clients acknowledge deliveries, and
 authentication triggers bounded replay of unacknowledged messages. Groups support
-creation, member queries, and persisted broadcast. HTTP file uploads and downloads
-are streamed, with authenticated access and ACK-able online and offline notifications.
+creation, paginated group listings, member queries, and persisted broadcast.
+HTTP file uploads and downloads are streamed, with authenticated access and
+ACK-able online and offline notifications.
 
 ## Project Layout
 
@@ -188,6 +189,7 @@ needed: `chatroom_client 127.0.0.1 8081 8080`.
 /send 2 Hello Bob
 /send 2,3 Hello everyone
 /create_group "Study group" 2,3
+/groups
 /members 42
 /send_group 42 Hello group
 /upload 2 "./notes final.pdf"

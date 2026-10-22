@@ -15,6 +15,12 @@ struct SavedGroupMessage {
     std::vector<std::uint64_t> recipients;
 };
 
+struct GroupInfo {
+    std::uint64_t id;
+    std::uint64_t owner_id;
+    std::string name;
+};
+
 struct FileInfo {
     std::uint64_t id;
     std::uint64_t owner_id;
@@ -55,6 +61,9 @@ public:
     std::uint64_t create_group(std::uint64_t owner, const std::string& name,
                                const std::vector<std::uint64_t>& members);
     std::vector<std::uint64_t> group_members(std::uint64_t group);
+    // Current memberships, ordered by group ID; the cursor is exclusive.
+    std::vector<GroupInfo> groups_for_user(std::uint64_t user, std::uint64_t after = 0,
+                                          std::uint64_t limit = 64);
 
     // A sender's client_message_id identifies one immutable outgoing message.
     // Exact retries return its existing ID without creating new deliveries.

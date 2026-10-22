@@ -164,8 +164,10 @@ TEST_CASE("Message acknowledgments validate identity and IDs before accessing My
 TEST_CASE("Group actions require authentication and validate fields before MySQL", "[handler][group]") {
     const RequestHandler handler(kTestTokens, {});
     const Session session{7, std::chrono::system_clock::now() + std::chrono::hours(1)};
-    for (const auto* action : {"create_group", "get_group_members", "send_group_message"}) {
+    const Session expired{7, std::chrono::system_clock::now() - std::chrono::seconds(1)};
+    for (const auto* action : {"create_group", "get_group_members", "send_group_message", "list_groups"}) {
         CHECK(handler.handle(Request{"g1", action}).response["error"]["code"] == "authentication_required");
+        CHECK(handler.handle(Request{"g1", action}, expired).response["error"]["code"] == "authentication_required");
     }
     std::vector<Request> invalid;
     for (const auto& name : {json(nullptr), json(""), json(42), json(std::string(129, 'x'))}) {
@@ -188,6 +190,10 @@ TEST_CASE("Group actions require authentication and validate fields before MySQL
             {{"group_id", group}, {"client_message_id", "m1"}, {"text", "Hello"}}});
     }
     invalid.push_back({"g1", "get_group_members"});
+    for (const auto& after : {json(nullptr), json(1), json(""), json("0"), json("01"), json("-1"),
+                              json("+1"), json("1x"), json(" 1"), json("18446744073709551616")}) {
+        invalid.push_back({"g1", "list_groups", {{"after_group_id", after}}});
+    }
     for (const auto* name : {"client_message_id", "text", "group_id"}) {
         auto data = json{{"group_id", "1"}, {"client_message_id", "m1"}, {"text", "Hello"}};
         data.erase(name);

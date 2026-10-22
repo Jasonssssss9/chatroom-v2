@@ -541,6 +541,83 @@ TEST_CASE("Replay advances only after its batch is acknowledged and respects cou
     running.check();
 }
 
+TEST_CASE("Members discover groups created while they were offline", "[database][tcp][group]") {
+    DatabaseFixture fixture;
+    const auto owner = fixture.store.create_user("owner", "unused-test-hash");
+    const auto member = fixture.store.create_user("member", "unused-test-hash");
+    const auto outsider = fixture.store.create_user("outsider", "unused-test-hash");
+    fixture.store.create_group(owner, "Owner only", {});
+    RunningChat running;
+    Peer creator(running.server.port());
+    authenticate(creator, running, owner);
+    creator.send("create_group", {{"name", "Offline study"}, {"members", {std::to_string(member)}}});
+    const auto created = creator.receive();
+    REQUIRE(created["ok"] == true);
+    const auto group = created["data"]["group_id"];
+    const json expected = json::array({{{"group_id", group}, {"owner_id", std::to_string(owner)}, {"name", "Offline study"}}});
+    {
+        Peer peer(running.server.port());
+        peer.send("list_groups");
+        CHECK(peer.receive()["error"]["code"] == "authentication_required");
+        authenticate(peer, running, member);
+        peer.send("list_groups", {{"user_id", std::to_string(owner)}});
+        const auto listed = peer.receive();
+        REQUIRE(listed["ok"] == true);
+        CHECK(listed["data"]["groups"] == expected);
+        CHECK(listed["data"]["next_after_group_id"].is_null());
+        peer.send("get_group_members", {{"group_id", listed["data"]["groups"][0]["group_id"]}});
+        CHECK(peer.receive()["data"]["members"] == json::array({std::to_string(owner), std::to_string(member)}));
+    }
+    Peer reconnected(running.server.port()), other(running.server.port());
+    authenticate(reconnected, running, member);
+    reconnected.send("list_groups");
+    CHECK(reconnected.receive()["data"]["groups"] == expected);
+    authenticate(other, running, outsider);
+    other.send("list_groups", {{"user_id", std::to_string(member)}});
+    CHECK(other.receive()["data"] == json{{"groups", json::array()}, {"next_after_group_id", nullptr}});
+    creator.send("list_groups");
+    CHECK(creator.receive()["data"]["groups"].size() == 2);
+    running.check();
+}
+
+TEST_CASE("Group listings paginate safely with fully escaped names", "[database][tcp][group]") {
+    DatabaseFixture fixture;
+    const auto owner = fixture.store.create_user("owner", "unused-test-hash");
+    const auto member = fixture.store.create_user("member", "unused-test-hash");
+    std::vector<std::string> ids;
+    for (int i = 0; i < 65; ++i) {
+        ids.push_back(std::to_string(fixture.store.create_group(owner, std::string(128, '\1'), {member})));
+        if (i == 10) fixture.store.create_group(owner, "Not a member", {});
+    }
+    RunningChat running;
+    Peer peer(running.server.port());
+    authenticate(peer, running, member);
+    peer.send("list_groups");
+    const auto first = peer.receive();
+    REQUIRE(first["ok"] == true);
+    REQUIRE(first["data"]["groups"].size() == 64);
+    CHECK(first["data"]["next_after_group_id"] == ids[63]);
+    CHECK(first.dump().size() <= kMaxFrameSize);
+    for (std::size_t i = 0; i < 64; ++i) {
+        CHECK(first["data"]["groups"][i]["group_id"] == ids[i]);
+        CHECK(first["data"]["groups"][i]["name"] == std::string(128, '\1'));
+    }
+    peer.send("list_groups", {{"after_group_id", first["data"]["next_after_group_id"]}});
+    const auto second = peer.receive();
+    REQUIRE(second["data"]["groups"].size() == 1);
+    CHECK(second["data"]["groups"][0]["group_id"] == ids[64]);
+    CHECK(second["data"]["next_after_group_id"].is_null());
+    peer.send("list_groups", {{"after_group_id", ids.front()}});
+    const auto exactly_full = peer.receive();
+    CHECK(exactly_full["data"]["groups"].size() == 64);
+    CHECK(exactly_full["data"]["next_after_group_id"].is_null());
+    peer.send("list_groups", {{"after_group_id", ids.back()}});
+    CHECK(peer.receive()["data"] == json{{"groups", json::array()}, {"next_after_group_id", nullptr}});
+    peer.send("list_groups", {{"after_group_id", "18446744073709551615"}});
+    CHECK(peer.receive()["data"]["groups"].empty());
+    running.check();
+}
+
 TEST_CASE("Groups notify online members and share persisted messages with online and offline members",
           "[database][tcp][group][message]") {
     DatabaseFixture fixture;

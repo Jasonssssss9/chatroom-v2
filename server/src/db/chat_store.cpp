@@ -73,6 +73,17 @@ std::vector<std::uint64_t> ChatStore::group_members(std::uint64_t group) {
         "SELECT user_id FROM group_members WHERE group_id = ? ORDER BY user_id", {group}));
 }
 
+std::vector<GroupInfo> ChatStore::groups_for_user(std::uint64_t user, std::uint64_t after,
+                                                std::uint64_t limit) {
+    const auto rows = database_.query(
+        "SELECT g.id, g.owner_id, g.name FROM group_members AS m "
+        "JOIN chat_groups AS g ON g.id = m.group_id "
+        "WHERE m.user_id = ? AND m.group_id > ? ORDER BY m.group_id LIMIT ?", {user, after, limit});
+    std::vector<GroupInfo> groups;
+    for (const auto& row : rows) groups.push_back({number(row[0]), number(row[1]), row[2].value()});
+    return groups;
+}
+
 std::uint64_t ChatStore::insert_message(std::uint64_t sender, const std::string& client_message_id,
                                        std::optional<std::uint64_t> group, const std::string& text,
                                        const std::vector<std::uint64_t>& recipients) {

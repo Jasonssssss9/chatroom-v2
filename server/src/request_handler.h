@@ -40,6 +40,7 @@ private:
     RequestResult send_message(const Request& request, std::uint64_t sender) const;
     RequestResult create_group(const Request& request, std::uint64_t owner) const;
     RequestResult group_members(const Request& request, std::uint64_t user) const;
+    RequestResult list_groups(const Request& request, std::uint64_t user) const;
     RequestResult acknowledge_message(const Request& request, std::uint64_t recipient) const;
     Database& database() const;
 

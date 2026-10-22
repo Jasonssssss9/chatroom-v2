@@ -164,6 +164,37 @@ TEST_CASE("Groups include their owner and persist one delivery per other member"
                     std::invalid_argument);
 }
 
+TEST_CASE("Group listings select current memberships in bounded ID order", "[database][group]") {
+    DatabaseFixture fixture;
+    const auto owner = fixture.store.create_user("owner", "test-hash");
+    const auto member = fixture.store.create_user("member", "test-hash");
+    const auto outsider = fixture.store.create_user("outsider", "test-hash");
+    CHECK(fixture.store.groups_for_user(member).empty());
+    const auto first = fixture.store.create_group(owner, "Shared group", {member});
+    fixture.store.create_group(outsider, "Unrelated group", {});
+    const auto second = fixture.store.create_group(member, "My group", {});
+    const auto groups = fixture.store.groups_for_user(member);
+    REQUIRE(groups.size() == 2);
+    CHECK(groups[0].id == first);
+    CHECK(groups[0].owner_id == owner);
+    CHECK(groups[0].name == "Shared group");
+    CHECK(groups[1].id == second);
+    CHECK(groups[1].owner_id == member);
+    CHECK(groups[1].name == "My group");
+    const auto limited = fixture.store.groups_for_user(member, 0, 1);
+    REQUIRE(limited.size() == 1);
+    CHECK(limited[0].id == first);
+    const auto next = fixture.store.groups_for_user(member, first, 1);
+    REQUIRE(next.size() == 1);
+    CHECK(next[0].id == second);
+    CHECK(fixture.store.groups_for_user(member, second).empty());
+    CHECK(fixture.store.groups_for_user(std::numeric_limits<std::uint64_t>::max()).empty());
+    fixture.database.execute("DELETE FROM group_members WHERE group_id = ? AND user_id = ?", {first, member});
+    const auto current = fixture.store.groups_for_user(member);
+    REQUIRE(current.size() == 1);
+    CHECK(current[0].id == second);
+}
+
 TEST_CASE("A group with a missing member is rolled back", "[database]") {
     DatabaseFixture fixture;
     const auto owner = fixture.store.create_user("owner", "test-hash");
