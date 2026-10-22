@@ -1,104 +1,77 @@
 # Concurrency and Performance
 
-`tests/benchmark.py` measures the real Release server over loopback TCP with
-MySQL persistence. Its asynchronous Python peers implement the existing JSON
-protocol, JWT authentication, message validation, and delivery ACKs. The console
-client remains covered by the functional integration walkthrough.
+`tests/benchmark.py` drives the real Release server over loopback TCP with
+MySQL persistence. Its asynchronous peers implement the JSON protocol,
+JWT authentication, message validation, and delivery ACKs. The console is tested
+separately by [process integration](testing.md#real-server-and-client-processes).
 
 ## Reproduce
 
-Build an optimized server and use the disposable test database described in
-[Database](database.md#integration-tests):
+First create `chatroom_test`, import the schema, and set database credentials as
+shown in [MySQL Tests](testing.md#mysql-tests). Then build a Release server:
 
 ```bash
 cmake -S . -B build-performance -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_CLIENT=OFF -DBUILD_TESTING=OFF
+  -DBUILD_CLIENT=OFF -DBUILD_TESTING=OFF -DBUILD_DATABASE_TESTS=OFF
 cmake --build build-performance -j2
-read -r -s -p 'Database password: ' CHATROOM_DB_PASSWORD
-printf '\n'
-export CHATROOM_DB_PASSWORD
-export CHATROOM_DB_NAME=chatroom_test
 python3 tests/benchmark.py --server build-performance/server/chatroom_server \
-  --output /tmp/chatroom-performance --pilot --warmup 1
+  --output /tmp/chatroom-performance-pilot --pilot --warmup 1
 python3 tests/benchmark.py --server build-performance/server/chatroom_server \
   --output /tmp/chatroom-performance
 ```
 
-To repeat an individual workload, supply its kind, connection count, TCP worker
-count, and duration. For example, hold 10,000 connections across the default
-90-second idle timeout:
+The pilot performs short checks; the final command runs the default matrix.
+For an individual workload, specify its kind, connections, TCP workers, and
+duration. This holds 10000 connections across the default 90-second idle timeout:
 
 ```bash
 python3 tests/benchmark.py --server build-performance/server/chatroom_server \
   --output /tmp/chatroom-performance-long-idle --case idle 10000 4 120
 ```
 
-The script uses Python 3 and the MySQL command-line client, without extra Python
-packages. Run it without other database tests. It inserts uniquely named users
-and deletes only its own records on completion. Setup uses unusable placeholder
-password hashes and locally signed, valid test JWTs so password hashing does not
-dominate connection setup. HTTP registration and login are outside this benchmark.
-Tokens and database passwords are never written to the result files.
+Use Python 3 and the MySQL command-line client. There are no external Python
+packages or pip installs. Run without other database tests. The harness requires
+`CHATROOM_DB_NAME=chatroom_test`, creates unique records, and deletes only its
+own records afterward. Seed users have unusable password hashes and locally
+signed test JWTs, so setup excludes HTTP login and password-hashing cost.
 
-Raw server logs and `results.json` are written to the output directory. Large
-logs belong outside the repository. The committed result snapshot accompanies
-the analysis below: [performance-results.json](performance-results.json).
+Logs and `results.json` go to the selected output directory. Passwords and tokens
+are not written to results. The committed
+[performance-results.json](performance-results.json) contains baseline,
+extended-idle, and lock-profile runs.
 
-## Workloads and Measurements
+## Method
 
-- Authenticated idle connections: 1,000, 5,000, and 10,000 connections, held for
-  45 seconds each, with staggered heartbeats every 15 seconds. Every connection
-  is checked again afterward. `max_connections` is raised to the selected count;
-  the default remains 1,024.
-- Ping baseline: 32 and 256 peers continuously send a request and wait for its
-  response. This exercises framing, JSON, worker dispatch, and Reactor output
-  without a database operation in the measured request.
-- Private chat: 16, 64, and 256 peers send bidirectionally in fixed pairs. Each
-  producer waits for persistence, receiver delivery, and the receiver's completed
-  ACK before sending its next message. The 256-peer case compares four and eight
-  TCP workers.
-- Group broadcast: 64, 256, and 512 peers form independent 64-member groups.
-  One producer per group sends to its 63 other members and waits for all ACKs.
-  Therefore a group message and a recipient delivery are different throughput
-  units.
-- Sustained chat: 64 private-chat peers run for 120 seconds to check completed
-  delivery counts and memory behavior over a longer interval.
+| Workload | Connections | Behavior |
+| --- | --- | --- |
+| Idle | 1000, 5000, 10000 | Authenticate, hold 45 seconds, stagger heartbeats every 15 seconds, check every peer afterward |
+| Ping | 32, 256 | Send one request and wait for its response |
+| Private chat | 16, 64, 256 | Fixed pairs; each producer waits for persistence, delivery, and ACK completion |
+| Groups | 64, 256, 512 | Independent 64-member groups; one producer per group waits for all 63 recipients' ACKs |
+| Sustained chat | 64 | Private chat for 120 seconds |
 
-Busy cases have a three-second warmup and a 20-second measurement window, repeated
-three times. The final in-flight operations are drained and included in the
-reported elapsed time. Message text contains 128 ASCII bytes; framing and JSON
-metadata add more bytes. Group sizes, thread counts, and request limits are
-recorded in the result file. The default global unfinished-request limit of
-1,024 and per-connection limit of 32 remain enabled.
+Busy cases use 128-byte ASCII text, a three-second warmup, and a 20-second
+measurement window, repeated three times. Final in-flight work is drained and
+included in elapsed time. The 256-peer private case compares four and eight TCP
+workers. Connection limits are raised for idle runs; ordinary request limits
+remain 32 per connection and 1024 globally.
 
-The load model is **closed loop**. A producer's next operation depends on the
-previous one finishing. Percentiles describe the observed workload and do not
-estimate latency under an independent, fixed arrival rate or an unbounded queue.
+This is a closed-loop load: each producer waits for its previous operation.
+Latency starts before serialization and sending. Response latency ends at the
+persistence response; delivery latency ends when a recipient parses the notice;
+ACK latency ends after the sender's response and every recipient's ACK response.
+For a group, that includes its slowest recipient. Percentiles use nearest rank.
 
-Latency starts before the producer serializes and sends its request:
+The harness validates notification contents, database message/delivery counts
+including warmup, pending ACK counts, peer failures, and server warnings.
+Duplicate notifications are counted separately. CPU, RSS, descriptors, and
+threads are recorded. CPU 100% means one logical CPU; server RSS excludes
+kernel TCP buffers, MySQL, and generator memory.
 
-- Response latency ends when the persistence response arrives.
-- Delivery latency ends when a recipient parses the notification.
-- Acknowledged latency ends when the producer has its response and all recipient
-  ACK responses have arrived. For groups this is the slowest recipient's ACK.
-
-Each notification is checked for sender, recipient, text, group, and message ID.
-Final database message and delivery counts must match the completed operations,
-including warmup, with zero unacknowledged deliveries. Server warnings and errors
-are also checked. Permitted duplicate notifications are counted separately.
-
-CPU time and resident memory are sampled separately for the server, MySQL, and
-the load generator. **100% CPU means one logical CPU**, so this eight-CPU machine
-can exceed 100% for one process. RSS is process memory and excludes kernel TCP
-buffers. MySQL memory and generator memory are not counted as server RSS.
-Server file-descriptor and thread counts are captured after connection setup.
-The raw JSON contains separate baseline, extended-idle, and lock-profile runs;
-supplementary runs are not included in the three-run medians below.
-
-These are same-machine WSL2 measurements. They include contention between MySQL,
-the server, and the generator, and do not include a real network's bandwidth,
-packet loss, or latency. Connection-holding capacity, ping throughput, and
-persisted chat throughput must be quoted separately.
+All processes share one WSL2 host. Results include local contention and exclude
+real-network conditions. Connection capacity, ping rate, and persisted-message
+throughput are separate measurements; closed-loop percentiles do not predict
+latency under an independent fixed arrival rate.
 
 ## Local Results: October 21, 2026
 
@@ -197,60 +170,27 @@ The raw resource measurements include MySQL separately: its sampled RSS ranged
 from about 458 to 550 MiB across these runs. This memory is additional to the
 server RSS quoted above.
 
-## Interpretation and Next Steps
+## Interpretation
 
-The server held 10,000 authenticated connections with a fixed number of threads
-and modest process memory. That connection capacity should not be confused
-with the number of clients that can continuously send persisted messages at low
-latency. In private chat, moving from 64 to 256 active producers did not raise
-four-worker throughput and substantially increased tail latency.
+The server held 10000 authenticated connections with a fixed thread count and
+about 29 MiB of process memory during the 120-second check. With eight TCP
+workers, private chat reached a median 596 fully persisted and acknowledged
+messages/s across 256 active peers. Holding many connections and serving many
+active senders are distinct capabilities; the ping rate is not chat throughput.
 
-The evidence points to the synchronous database business path as the first
-bottleneck in these chat workloads: it is much slower than the database-free
-ping baseline, the server CPU remains below one full logical CPU, and increasing
-workers improves throughput. Each private message needs a durable message
-transaction and a recipient ACK update. Each group message needs its transaction
-plus 63 independently persisted ACKs. InnoDB log-buffer waits were zero. Private
-chat recorded no row-lock waits; the six multi-group runs recorded 210 row-lock
-waits in total, so transaction lock duration also deserves attention. The
-measurements do not separately
-attribute time to SQL execution, socket round trips, disk synchronization, and
-commit scheduling; a claim that any one of those alone is responsible would need
-additional profiling.
+The results point to synchronous database work as the first chat bottleneck:
+database-free ping is much faster, server CPU stays below one core during chat,
+and eight workers improve the 256-peer private median by about 78%. Four-worker
+throughput flattens as active peers increase, while tail latency rises.
 
-Two supplementary 20-second group runs measured row-lock wait time explicitly.
-The four-group run recorded 20 waits totaling 98 ms; the eight-group run recorded
-62 waits totaling 216 ms. These totals are small compared with their measurement
-windows. They do not support treating row-lock contention as the main explanation
-for the overall throughput limit, although other kinds of database waiting were
-not individually timed.
+Private chat recorded no row-lock waits; the six baseline multi-group runs
+recorded 210. InnoDB log-buffer waits were zero. Two supplemental 20-second group
+runs measured 20 waits totaling 98 ms and 62 waits totaling 216 ms. These totals
+do not identify row-lock contention as the main throughput limit. SQL execution,
+network round trips, disk synchronization, and commit scheduling were not timed
+individually, so the measurements do not isolate a single database cause.
 
-For this host, eight workers improved the 256-peer private-chat median by about
-78% and reduced ACK-completion p99. This is an existing configuration choice,
-rather than a reason to introduce more concurrency abstractions. It does not
-establish an ideal worker count for other machines or for group workloads.
-
-If the project needs more persisted-message throughput, the next small experiment
-should batch recipient delivery inserts in one prepared SQL statement. Currently
-group persistence performs one insert per recipient. Prepared-statement reuse
-could be evaluated after that. Keep measuring completed ACKs, preserve durable
-storage settings, and compare the same workloads before accepting an optimization.
-These results give no reason to replace the Reactor, add a shared connection
-pool, or split the application into more services.
-
-## Describing the Measurements
-
-An accurate connection-capacity statement is:
-
-> Validated 10,000 authenticated TCP connections on an 8-vCPU Linux/WSL2 host
-> with four chat workers, 10 total server threads, and approximately 29 MiB of
-> server RSS during a 120-second loopback heartbeat test.
-
-For message throughput, keep the worker count and persistence requirements:
-
-> Measured a median 596 fully persisted and recipient-acknowledged private
-> messages per second across 256 active peers using eight chat workers and
-> durable MySQL writes in loopback benchmarks.
-
-Neither statement establishes a production capacity limit. In particular, the
-ping rate should never be presented as persisted chat-message throughput.
+Reducing SQL round trips, such as batching recipient delivery inserts, remains
+a possible future improvement. No database optimization was applied for these
+results. The observed durations and local host establish a reproducible project
+benchmark, not a production capacity limit or a long-term memory guarantee.

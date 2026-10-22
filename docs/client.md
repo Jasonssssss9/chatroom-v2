@@ -1,176 +1,114 @@
 # Command-Line Client
 
-The client provides commands for account registration, login, and chat. HTTP
-handles account operations; login automatically sends the returned JWT through
-TCP authentication. The JWT stays in memory and is not displayed or saved.
+The console provides chat commands and readable output. HTTP handles registration,
+login, and files; TCP handles authentication, messaging, ACKs, and heartbeats.
+The [README](../README.md#verify) walks through two clients.
 
-## Start the Client
+## Start
 
 ```bash
 ./build/client/chatroom_client
-./build/client/chatroom_client 127.0.0.1 8081 8080
-./build/client/chatroom_client --json 127.0.0.1 8081 8080
-./build/client/chatroom_client --heartbeat-interval 30 --heartbeat-timeout 60
-./build/client/chatroom_client --help
 ```
 
-Arguments are the numeric IPv4 address, TCP port, and HTTP port, in that order.
-Defaults are `127.0.0.1`, `8081`, and `8080`. Both ports must be between 1 and
-65535. HTTP and TCP use the same server address. The server must be running;
-the client opens its TCP connection at startup. The client requires no database
-credentials or JWT signing secret.
+Usage:
 
-The console sends automatic heartbeats, with a 30-second interval and a 60-second
-pong timeout. The two heartbeat options accept integer seconds from 1 to 3600.
-They can appear before or after the positional arguments. Keep the interval below
-the server's idle timeout. See [Connection Keepalive](keepalive.md).
+```text
+chatroom_client [options] [IPv4 address] [TCP port] [HTTP port]
+```
+
+Defaults are `127.0.0.1`, TCP `8081`, and HTTP `8080`. Addresses must be
+numeric IPv4 addresses; ports must be 1–65535. Use `--help` for usage.
+
+| Option | Effect |
+| --- | --- |
+| `--json` | Display raw incoming TCP JSON |
+| `--heartbeat-interval N` | Seconds between automatic probes; default 30 |
+| `--heartbeat-timeout N` | Seconds to wait for a matching pong; default 60 |
+
+Both heartbeat settings accept 1–3600 seconds. Keep the interval shorter than
+the server's idle timeout. See [Keepalive](keepalive.md).
 
 ## Commands
 
-| Command | Purpose |
+Replace the argument names below with actual values.
+
+| Command | Behavior |
 | --- | --- |
-| `/register <username> <password>` | Create an account and display its user ID |
-| `/login <username> <password>` | Log in over HTTP and authenticate this TCP connection |
+| `/register <username> <password>` | Create an account and print its ID; does not log in |
+| `/login <username> <password>` | Obtain a JWT over HTTP and authenticate TCP |
 | `/send <id[,id...]> <text>` | Send a private or multi-recipient message |
-| `/create_group <name> [id,...]` | Create a group containing yourself and selected users |
-| `/groups [after-group-id]` | List your groups, up to 64 per page |
-| `/members <group-id>` | Query the members of a group you belong to |
-| `/send_group <group-id> <text>` | Send a message to every other member |
+| `/create_group <name> [id[,id...]]` | Create a group containing its creator and selected users |
+| `/groups [after-group-id]` | List one page of your groups |
+| `/members <group-id>` | List members of a group you belong to |
+| `/send_group <group-id> <text>` | Message every other group member |
 | `/upload <id[,id...]> <path>` | Upload a file for selected users |
-| `/download <file-id> <path>` | Download to a new local file; existing files are preserved |
-| `/ping` | Check the TCP connection |
-| `/help` | List commands |
-| `/quit` | Disconnect and exit |
+| `/download <file-id> <path>` | Download to a new local file |
+| `/ping` | Request a visible pong |
+| `/help` | Show commands |
+| `/quit` | Cancel I/O and exit |
 
-For example, in Alice's terminal:
+Wait for `Authenticated as user ...` after login before using authenticated
+commands. One connection cannot switch accounts; reconnect first. Logging in
+again as the same user refreshes the session. Failed refreshes and rejected
+account switches preserve the previous session and HTTP token.
 
-```text
-/register alice example-password
-/login alice example-password
-```
+The HTTP file token is retained in memory only after the matching TCP
+authentication succeeds. It is never printed or saved. Raw JSON authentication
+does not configure the HTTP file client.
 
-Registration prints `Registered user 1. Use /login to sign in.` The exact ID
-depends on the database. Registration does not log in automatically. Login
-prints `Authenticated as user 1.` only after TCP authentication succeeds.
+## Input and Output
 
-Register and log in as Bob in a second terminal, note his ID, and send to it:
-
-```text
-/send 2 Hello Bob
-/send 1,2 Hello everyone
-```
-
-The sender sees `Sent message 105.` after persistence. The recipient sees:
+Credentials, group names, and paths support double quotes and backslash escapes:
 
 ```text
-[message 105] user 1: Hello Bob
-```
-
-Use actual registration IDs rather than assuming they are 1 and 2. Recipient
-IDs are positive decimal strings without signs or leading zeros. Use commas
-without spaces between IDs; there may be 1 to 64 entries. The server merges
-duplicates. Message text is the rest of the line after separating whitespace,
-including any trailing spaces. Quotes in message text are literal. Text must
-contain 1 to 4096 UTF-8 bytes.
-
-Quote a username or password containing spaces:
-
-```text
-/register "alice smith" "example password"
-/login "alice smith" "example password"
-```
-
-Inside quoted credentials, escape a quote as `\"` and a backslash as `\\`.
-Commands are read directly from stdin; the terminal echoes credentials as typed.
-Usernames contain 1 to 64 bytes and passwords 8 to 128 bytes, matching the API.
-
-Each `/send` or `/send_group` generates a fresh `client_message_id` from a random per-process
-prefix and a sequence number. Restarting the client does not reuse a fixed
-counter as a message ID. The client does not automatically retry uncertain sends;
-raw JSON requests can reuse a known client message ID for an exact retry.
-
-For group chat:
-
-```text
+/register "Alice Smith" "a password with spaces"
 /create_group "Study group" 2,3
-/groups
-/members 42
-/send_group 42 Hello everyone
-```
-
-Use the ID returned by creation or `/groups`. The creator is included automatically,
-and the group may contain at most 64 members in total. Quote a group name containing
-spaces; its limit is 128 UTF-8 bytes. Group messages use the same 4096-byte text
-limit and are displayed with both group and message IDs. Online members receive
-a group creation notice. See [Group Chat](groups.md) for a complete walkthrough,
-permission checks, and retry behavior.
-
-`/groups` lists only your current groups, including groups created while you were
-offline. Each row shows the ID, name, and owner. An empty list prints `No groups.`
-When more than 64 groups match, follow the displayed `Next page: /groups <id>`
-command. Running `/groups` without a cursor refreshes the first page.
-
-For files, wait for TCP login to succeed, then use:
-
-```text
-/upload 2,3 "./notes final.pdf"
+/upload 2 "./notes final.pdf"
 /download 42 "./received notes.pdf"
 ```
 
-Use the returned file ID and choose a new destination whose parent exists.
-File notices are deduplicated and acknowledged automatically; ACK confirms the
-notice, not a completed download. Transfers stream bytes on the input thread,
-while the receiver continues chat and ACKs. File requests use five-second connect,
-30-second read/write, and 120-second total timeouts. See [File Transfers](files.md).
+These IDs are examples; use IDs printed by your server. Message text is the
+remainder of the line after the command arguments. Quotes in message text are
+literal. Leading separator whitespace is skipped; trailing text is preserved.
+Passwords are ordinary terminal input and remain visible while typing.
 
-## Messages, Errors, and Reconnection
+Each input line is limited to 64 KiB, excluding its newline and an optional
+trailing carriage return. An oversized line is rejected and discarded through
+the next newline; later valid lines can still be read.
 
-The receiver continues processing messages and automatic ACKs during HTTP
-registration, login, or file transfers. TCP writes are serialized with terminal requests.
-Successful automatic ACK responses are hidden in normal output; failures remain
-visible. Recent duplicate messages are displayed once but acknowledged every
-time. The history holds the most recent 1024 distinct IDs in memory.
+The client prints message IDs, senders, group IDs, and file details, escaping
+terminal control characters. It remembers the latest 1024 distinct message IDs
+to suppress duplicate display and ACKs every copy. This history is in memory
+only. Each `/send` or `/send_group` creates a new retry key; repeating the
+command sends a new message. There is no automatic uncertain-send retry.
 
-Errors identify the operation and the server's error code, for example:
+Raw JSON requests are also accepted as individual input lines. The client adds
+the TCP length prefix; no manual framing is needed. `--json` displays incoming
+payloads, including automatic ACK and heartbeat responses. Registration and
+other local command output remain readable text.
 
-```text
-Error [send_message]: authentication_required: Authenticate before using this action
-Error: invalid_credentials: Invalid username or password
-```
+## Files and Connection Lifecycle
 
-Command syntax errors and HTTP failures leave the TCP connection available for
-later commands. Authentication HTTP has five-second connection/read/write timeouts and a
-ten-second total request limit. Unexpected TCP failures end the client.
-Message text and errors escape control characters so a newline or escape byte
-cannot overwrite terminal output. UTF-8 text remains readable.
+Downloads never overwrite an existing path. The parent directory must exist;
+failed downloads remove partial output. Choose the destination yourself rather
+than relying on the server's original filename. File transfers stream in 8 KiB
+chunks. See [Files](files.md) for permissions and limits.
 
-The console reports JWT expiration once and clears its HTTP file token. Use
-`/login` again for the same user. To switch accounts,
-quit and reconnect; the server does not permit changing users on one connection.
-A second login on another connection replaces the first one. There is no
-automatic reconnection. See [Authentication](authentication.md).
+The input thread runs commands, a receiver displays TCP traffic and sends ACKs,
+and a timer sends heartbeats and reports login expiration. A send mutex serializes
+manual requests, ACKs, heartbeats, and the EOF half-close. TCP disconnection also
+cancels in-flight HTTP calls.
 
-A missing matching pong cancels blocked TCP I/O and exits with a heartbeat-timeout
-error. Server EOF prints a reconnection hint without waiting for terminal input.
-Automatic pongs are hidden in normal output; `/ping` remains visible. The timer
-continues while HTTP operations block the input thread, and connection loss
-cancels in-flight HTTP requests. TCP socket sends time out after five seconds.
+HTTP authentication uses five-second connect/read/write timeouts and a
+ten-second total timeout. File requests use a five-second connect timeout,
+30-second read/write timeouts, and a 120-second total timeout. Authentication
+replies, upload replies, and download error bodies are limited to 8 KiB;
+downloaded bytes stream directly to disk. TCP writes have a five-second socket
+timeout.
 
-Use `/quit` for immediate cancellation. Stdin EOF sends FIN and waits for final
-server output. After that half-close the client displays notifications without
-ACKs, so keep stdin open to finish automatic replay. Input is still bounded to
-64 KiB per line; an oversized line is discarded through its newline.
+`/quit` cancels pending I/O immediately. Ctrl+D closes the sending direction
+and waits for final replies; it stops heartbeats and automatic ACKs, so keep stdin
+open while receiving offline replay. Server disconnection exits even when stdin
+is idle and prints a login hint. There is no automatic reconnection.
 
-## JSON Debugging
-
-JSON requests remain accepted in either output mode. Use `--json` to display raw
-TCP payloads with the existing `<` prefix, including automatic ACK responses:
-
-```bash
-printf '%s\n' '{"type":"request","request_id":"p1","action":"ping"}' | \
-    ./build/client/chatroom_client --json
-```
-
-The flag changes display only. Commands, automatic TCP authentication, message
-deduplication, and ACKs keep the same behavior. HTTP login responses and tokens
-are never printed. See [JSON Protocol](protocol.md) for raw request examples.
+See [Testing](testing.md#standalone-client) to build the client independently.

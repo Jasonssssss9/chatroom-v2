@@ -1,100 +1,103 @@
 # Architecture
 
-## Project Conventions
-
-- Use C++17. Keep code and CMake straightforward, and add abstractions only when
-  a feature needs them.
-- Use idiomatic English for all project text, including documentation, comments,
-  and runtime messages.
-- Use conventional commit messages such as `feat(database): description` or
-  `fix(protocol): description`.
-- Run the HTTP API and TCP chat service in a single process.
-- Keep the server and command-line client in the same repository and build them
-  as separate executables.
-- Keep their implementations in `server/src/` and `client/src/`. Shared code in
-  `common/` contains the protocol, framing, logging, and small resource utilities;
-  neither component links to the other's implementation.
-- Configure component-specific dependencies in each component's `CMakeLists.txt`.
-  Use `BUILD_SERVER` and `BUILD_CLIENT` to select which components to build.
+The server runs HTTP and TCP services in one process. The command-line client is
+a separate executable. They share protocol utilities and communicate over the
+network; neither links to the other's implementation.
 
 ## Responsibilities
 
-- HTTP: registration, login, JWT issuance, and file uploads and downloads.
-- TCP: connection authentication, direct messages, messages to multiple users,
-  group chat, notifications, acknowledgments, and heartbeats.
-- Reactor: exclusive ownership of sockets, connection state, and I/O buffers.
-- Worker pool: business logic and database operations, with results returned to
-  the Reactor through a queue.
-- MySQL: users, groups, messages, delivery status, and file metadata.
-- Disk storage: uploaded file contents, referenced by storage keys in MySQL.
+| Component | Responsibility |
+| --- | --- |
+| HTTP service | Registration, login, JWT issuance, and streamed file transfers |
+| TCP Reactor | Socket ownership, framing, buffered I/O, online sessions, and idle cleanup |
+| TCP worker pool | JSON validation, application requests, SQL, and replay queries |
+| HTTP worker pool | Password hashing, SQL, and file I/O |
+| MySQL | Users, groups, messages, delivery acknowledgments, and file metadata |
+| File storage | Uploaded bytes, addressed by server-generated storage keys |
+| Console client | Commands, HTTP login, TCP authentication, display, ACKs, and heartbeats |
 
-Each TCP message consists of a four-byte length in network byte order followed by
-a JSON payload. Direct messages are persisted before the server reports success
-to the sender and notifies online recipients. Receivers acknowledge deliveries;
-unacknowledged messages replay after authentication. The console client suppresses
-recent duplicates and acknowledges repeated deliveries.
+The TCP path uses one non-blocking epoll Reactor and four workers by default.
+Workers return results through an eventfd-backed queue. The Reactor applies each
+result before submitting the next request from that connection. HTTP has a
+separate fixed pool of four workers and its own listener thread.
 
-## Current Status
+A message and its recipient deliveries commit before the sender receives success
+or recipients receive notifications. Unacknowledged deliveries replay after
+authentication. File bytes travel over HTTP; their TCP notifications use the
+same delivery pipeline. See [Threading](threading.md), [Messaging](messaging.md),
+and [Files](files.md) for lifecycle details.
 
-The server network layer implements non-blocking IPv4 TCP, an epoll ET Reactor,
-message framing, buffered writes, and cross-thread sends through an eventfd-backed
-queue. A configurable pool (four workers by default) parses and handles requests,
-with per-connection ordering and completions returned to the Reactor. The executable
-implements `ping`, `authenticate`, `send_message`, `ack_message`, and
-correlated protocol errors. Catch2 covers framing, request validation, handlers,
-connection I/O, and TCP integration. The command-line client uses a blocking TCP
-connection with an input thread, a receiver, and a small heartbeat timer. Its library and tests can be
-built without the server. See [Networking](networking.md), [JSON Protocol](protocol.md),
-and [Worker Pool and Request Handoff](threading.md).
+## Project Layout
 
-The console provides registration, login, and messaging commands. Its `AuthClient`
-uses the same cpp-httplib dependency as the server, without linking server code.
-HTTP login passes the JWT directly to TCP authentication. Normal output formats
-messages and errors; `--json` preserves raw TCP display. See [Command-Line Client](client.md).
+| Path | Contents |
+| --- | --- |
+| `server/src/net/` | Linux sockets, epoll, connections, and Reactor |
+| `server/src/db/` | MySQL connections, transactions, and chat operations |
+| `server/src/auth/` | Password hashing, user authentication, and JWTs |
+| `server/src/http/` | HTTP endpoints and request logging |
+| `server/src/` | Configuration, sessions, worker pool, dispatch, and entry point |
+| `client/src/` | Console commands, HTTP clients, and TCP client |
+| `common/` | Framing, JSON protocol, logging, descriptor ownership, and pending files |
+| `cmake/` | Shared dependency configuration |
+| `config/` | Tracked example and optional local configuration |
+| `sql/` | Schema and explicit migrations |
+| `tests/` | Catch2 cases, process integration, and performance harness |
+| `docs/` | Usage, protocol, design, and verification references |
+| `build/` | Generated CMake files, dependencies, binaries, and test metadata |
+| `data/files/` | Default runtime file storage; excluded from Git |
 
-JSON configuration and command-line options control the bind address, port, worker
-count, connection and request limits, and log level. The dispatcher limits
-unfinished requests, retaining submitted tasks in the global count after disconnect.
-The Reactor pauses and retries accepting
-when descriptors or socket memory are exhausted, while serving existing clients.
-Database settings and JWT secrets can be supplied through
-environment variables. Startup, connections, and request failures use a shared
-JSON logger. The Reactor also scans for idle TCP connections using its epoll
-timeout. The console sends periodic pings and reports JWT expiry without adding
-a server timer thread. See [Configuration and Logging](configuration.md) and
-[Connection Keepalive](keepalive.md).
+## Build Options
 
-MySQL persistence is implemented through the C API, with prepared statements,
-RAII connections and transactions, and concrete operations for users, groups,
-messages, acknowledgments, and file metadata. The executable checks connectivity
-before starting workers. Database integration tests use a separate disposable
-database. See [MySQL Persistence](database.md).
+The project requires Linux, C++17, and CMake 3.20 or later. The server additionally
+requires pkg-config, MySQL client development files, and OpenSSL 3.0 or later.
+The standalone client requires none of those server dependencies.
 
-HTTP registration and login are implemented with cpp-httplib, OpenSSL scrypt,
-and jwt-cpp HS256 token issuance. HTTP uses a separate fixed worker pool; each
-worker reuses its own database connection. Both listeners run in the same process.
-See [HTTP Authentication](authentication.md).
+| CMake option | Default | Effect |
+| --- | --- | --- |
+| `BUILD_SERVER` | `ON` | Build the server and its libraries |
+| `BUILD_CLIENT` | `ON` | Build the console client and its libraries |
+| `BUILD_TESTING` | `ON` | Build Catch2 tests and register them with CTest |
+| `BUILD_DATABASE_TESTS` | `OFF` | Add MySQL tests; requires server and testing enabled |
 
-TCP verifies JWT signatures and claims, checks that the user exists, and returns
-the identity to the Reactor. `SessionManager` keeps connection-to-user and
-user-to-connection maps on the Reactor thread. A new authenticated connection
-replaces the previous one; disconnect removes its binding. Workers receive
-session copies, and expired sessions cannot authorize business requests or online
-routing.
+For a server-only Release build:
 
-`send_message` validates recipients and stores one message with its delivery rows
-in a transaction. A worker returns a serialized notification and recipient user
-IDs. The Reactor looks up their current connections and queues online delivery,
-even if the sender disconnected after the task started. Exact sender retries
-reuse the stored ID and may notify recipients again. `ack_message` confirms only
-the session user's delivery. After binding a session, the Reactor schedules
-bounded replay on workers and waits for a batch's ACKs before fetching more.
-Group creation, paginated listings of a user's groups, member queries, and group
-messages are implemented. Group sends check membership and retain their original
-recipient snapshot across retries.
-Group and private messages share ACKs, replay, and online routing.
-HTTP uploads and downloads stream file bytes on HTTP workers. File metadata,
-permissions, and the file notification's message and deliveries commit together;
-the Reactor routes the resulting `file_available` notice. Files use the same ACK
-and replay pipeline as text. See [Messaging](messaging.md), [Group Chat](groups.md),
-and [File Transfers](files.md).
+```bash
+cmake -S . -B build-server -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_CLIENT=OFF -DBUILD_TESTING=OFF -DBUILD_DATABASE_TESTS=OFF
+cmake --build build-server -j2
+```
+
+For a client-only build, see [Standalone Client](testing.md#standalone-client).
+
+| Target | Purpose |
+| --- | --- |
+| `chatroom_common` | Shared utilities and wire protocol |
+| `chatroom_net` | Server network layer |
+| `chatroom_db` | MySQL access and persistence |
+| `chatroom_auth` | Passwords, user authentication, and JWTs |
+| `chatroom_http` | HTTP authentication and files |
+| `chatroom_app` | Configuration, sessions, dispatch, and worker pool |
+| `chatroom_server` | Server executable |
+| `chatroom_client_net` | Blocking TCP client |
+| `chatroom_client_app` | Console and HTTP clients |
+| `chatroom_client` | Client executable |
+| `chatroom_tests` | Ordinary Catch2 suite |
+| `chatroom_database_tests` | Optional MySQL integration suite |
+
+CMake fetches pinned versions of nlohmann/json 3.11.3, cpp-httplib 0.62.0,
+jwt-cpp 0.7.2, and Catch2 3.8.1. jwt-cpp is server-only; Catch2 is needed only
+for tests. Component dependencies belong in each component's `CMakeLists.txt`;
+shared dependency setup lives in `cmake/Dependencies.cmake`.
+
+## Conventions and Scope
+
+Use straightforward C++17, RAII, and concrete classes with clear ownership.
+Add abstractions when a feature needs them. Keep project text, comments, and
+runtime messages in idiomatic English. Commit messages follow
+`feat(scope): description` or `fix(scope): description`.
+
+The application uses IPv4 TCP and HTTP without built-in TLS. It has one online
+connection per user, fixed worker pools, and synchronous SQL on workers. Group
+membership is set at creation; file retention, automatic reconnection, and token
+revocation are not implemented. Measured capacity and database bottlenecks are
+documented in [Performance](performance.md).

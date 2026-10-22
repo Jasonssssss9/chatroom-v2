@@ -1,273 +1,134 @@
 # Worker Pool and Request Handoff
 
-The server uses one Reactor thread and a fixed worker pool. Socket I/O remains
-event-driven. JSON parsing, application handlers, and response serialization run
-as worker tasks. The executable starts four workers by default; JSON configuration
-or `--workers` can change the fixed pool size. See [Configuration and Logging](configuration.md).
-
-HTTP authentication uses cpp-httplib's own fixed worker pool. HTTP workers handle
-password hashing and SQL independently of the TCP Reactor and its request pool.
-See [HTTP Authentication](authentication.md) for HTTP limits and lifetimes.
-
-File uploads and downloads use that same HTTP pool. File bytes stream on workers;
-successful uploads post a short `UserNotification` callback through `TcpServer::post()`.
-Only the Reactor calls `RequestDispatcher::notify()` to resolve online sessions.
-File notices share the existing ACK/replay window. See [File Transfers](files.md).
-
-The client's receiver and heartbeat timer are joined threads. Its send mutex
-serializes terminal requests, automatic ACKs, heartbeats, and the EOF half-close;
-a separate state mutex protects pending pings, tokens, and the login deadline.
-No state lock is held during a socket write. Shutdown wakes the timer before
-joining, and receiver termination cancels in-flight HTTP calls. See
-[Connection Keepalive](keepalive.md).
-
-## Responsibilities
-
-| Component | Responsibility |
-| --- | --- |
-| `TcpServer` | Socket I/O, connection ownership, and callbacks posted to the Reactor |
-| `ThreadPool` | A FIFO task queue, fixed workers, and shutdown that joins them |
-| `RequestDispatcher` | Per-connection sequencing and handing results back to the Reactor |
-| `SessionManager` | Reactor-owned user bindings and online routing |
-| `RequestHandler` | Authentication, message validation and persistence, and response construction |
-
-The pool knows nothing about connections, JSON, or chat operations. Its workers
-wait on a condition variable when the task queue is empty. They release the queue
-mutex before executing a task. Different connections can use different workers.
-The number of threads does not grow with the number of clients.
+TCP remains event-driven: one Reactor owns network state, while a fixed pool
+runs blocking application work. Four workers are used by default, regardless of
+connection count. HTTP has a separate fixed pool.
 
 ## Request Flow
 
-```text
-Reactor: receive bytes and extract complete frames
-    -> append the payload to that connection's request queue
-    -> submit its first request to the worker pool
-       with a copy of the connection's current session
+1. The Reactor extracts a complete payload and checks admission limits.
+2. The dispatcher queues it under its connection ID.
+3. If the connection has no active task, its next payload and current session
+   snapshot are submitted to the worker pool.
+4. A worker parses the request, runs the handler, serializes the result, and
+   posts a completion through `TcpServer::post()`.
+5. The Reactor applies session changes, queues the response, routes notifications,
+   and starts the connection's next task.
 
-Worker: parse the request envelope
-    -> execute the handler
-    -> serialize the response
-    -> post a completion through TcpServer::post()
+| Queue | Ownership and wakeup |
+| --- | --- |
+| Per-connection payloads | Reactor-only; preserve arrival order |
+| Pool tasks | Mutex and condition variable; consumed by fixed workers |
+| Reactor completions | Mutex and eventfd; applied on the I/O thread |
+| Pending sends | Mutex and eventfd; transferred to connection output buffers |
 
-Reactor: wake through eventfd and apply the completion
-    -> apply successful authentication, replacing any previous online connection
-    -> queue the response for socket output
-    -> route any message notification to recipients' current online connections
-    -> submit the next request for that connection
-```
-
-There are four ordinary queues with different jobs:
-
-| Queue | Access | Purpose |
-| --- | --- | --- |
-| Per-connection requests | Reactor only | Keep requests from one client in order |
-| Pool tasks | Mutex and condition variable | Assign runnable work to fixed workers |
-| Reactor completions | Mutex and eventfd | Return results to the owning I/O thread |
-| Pending sends | Mutex and eventfd | Transfer serialized output to connection buffers |
-
-The application request queues and completion queue do not need a polling thread.
-Pool submissions wake workers; completions wake the existing Reactor. Admission
-limits in the dispatcher bound this request pipeline, including pool tasks and
-completions awaiting the Reactor. The existing frame and connection-output limits
-remain in place.
+The pool removes a task under its mutex and releases the lock before executing
+it. Completion processing needs no polling thread.
 
 ## Request Capacity
 
-The defaults are 32 unfinished requests per connection and 1024 across the server.
-Configure them with `server.max_requests_per_connection` and
-`server.max_pending_requests`, or the corresponding command-line options. Both
-limits must be positive; the global limit may be smaller than the per-connection
-limit. See [Configuration and Logging](configuration.md).
+Defaults are 32 unfinished requests per connection and 1024 globally.
+Configure them through [Configuration](configuration.md). Both must be positive;
+the global limit may be smaller than the per-connection limit.
 
-An admitted request keeps one global slot while it is waiting in a connection's
-queue, submitted to the pool, running, or awaiting a Reactor completion. Only the
-Reactor changes this count. Completion releases the slot even if the connection
-has already disappeared.
+Each admitted request keeps its slot while waiting, submitted, running, or
+awaiting a Reactor completion. Only the Reactor changes the counts.
+Replay queries also consume one slot.
 
-If either limit is full, the dispatcher logs `request_rejected` and closes the
-offending connection with reason `request_limit`. Its waiting requests are dropped
-and their slots are released immediately. Already submitted tasks retain their
-slots until their completions arrive. Repeatedly disconnecting and reconnecting
-therefore cannot fill the pool with uncounted tasks.
+If a limit is full, the dispatcher logs `request_rejected` and closes the
+offending connection with reason `request_limit`. Waiting requests are dropped
+and release their slots. Submitted tasks keep their slots until completion,
+even after disconnect. Reconnecting therefore cannot create uncounted tasks.
 
-This is an overload-close policy. Pending replies on that connection are not
-guaranteed, and no extra error-response task is queued during overload. The JSON
-envelope and error-code set are unchanged by admission limits.
+Overload closes the connection without adding another error-response task.
+Pending replies are not guaranteed. These limits bound request counts rather
+than all memory a handler could allocate. Generic `ThreadPool::submit()` and
+`TcpServer::post()`/`send()` have no independent queue limit; another producer
+would need its own admission rule.
 
-The dispatcher owns the application's pool and is its only producer, so the pool
-does not need a second capacity policy. The generic `ThreadPool::submit()` and
-`TcpServer::post()`/`send()` APIs have no independent queue limits; other future
-producers must apply their own admission rules. These limits bound request counts,
-not total process memory or the size of arbitrary objects created by handlers.
+The network layer checks admission between batches of at most 16 complete
+frames, draining full batches without waiting for another ET event.
 
-The network layer returns at most 16 complete frames per receive batch, then lets
-the dispatcher check admission. Full batches are followed by another receive call
-until `EAGAIN` or EOF. This bounds temporary frame collection without leaving data
-waiting for a new ET notification.
+## Ordering and Ownership
 
-## Ordering
+Only one task per connection is submitted at a time. For pipelined requests A
+then B, the Reactor applies A's result and queues its response before submitting
+B. Authentication therefore binds the session before B receives its snapshot.
+Different connections have no global execution or completion order.
 
-Only one request per connection is submitted at a time. Each connection stores a
-queue of waiting payloads and an `active` flag for its submitted task. Incoming
-requests append to the queue. After successful submission, the payload is removed
-from that queue and belongs to the task. A Reactor completion clears the flag and
-then starts the next request.
+A task owns its payload, connection ID, parsed request, and optional session
+copy. It holds no socket pointer, connection reference, or reference into the
+dispatcher's queues. The handler can run concurrently for different connections;
+shared dependencies must support this. Database connections are worker-local.
 
-For example, if one connection sends A followed by B:
+`RequestResult` contains response JSON and optional authentication,
+notification, or ACK effects. Workers serialize notifications and return
+recipient user IDs. The Reactor checks expiry again before binding identities
+and resolves recipients' current sessions when routing. Expired or offline
+recipients remain pending in MySQL.
 
-1. A starts; B waits in the application queue.
-2. A finishes on a worker and posts its result.
-3. The Reactor applies A's result and queues its response.
-4. Only then is B submitted.
-
-This orders both execution and responses on one connection. Authentication binds
-the session before the next task receives its snapshot, so pipelining
-`authenticate` followed by a business request preserves the expected identity.
-Requests from different connections have no global execution or completion order.
-
-## Data Ownership
-
-A worker task owns its payload string and carries the connection ID by value.
-It parses that payload into its own `Request`. It never holds a `TcpConnection&`,
-socket pointer, or reference to the dispatcher's per-connection queue.
-
-The handler receives the connection ID and a const reference to that task's local
-request, together with an optional session copy. It may be invoked concurrently
-for different connections, so shared service dependencies must support concurrent
-calls. `RequestHandler` holds immutable configuration and a shared token service;
-its database connection is private to each worker. It returns a `RequestResult`
-containing JSON, an optional authenticated identity, and an optional serialized
-`UserNotification` with recipient user IDs. Serialization failures and oversized
-results discard these effects. The Reactor checks expiry again before binding an
-identity. See [MySQL Persistence](database.md).
-
-The handler serializes message notifications on its worker after the database
-transaction commits. The dispatcher checks their frame length before posting a
-completion. Online routing happens only on the Reactor, using user IDs rather
-than connection references captured by workers. Offline and expired recipients
-are skipped; their database deliveries remain pending.
-
-Only Reactor callbacks modify the request map, session maps, and network state.
-Completions look up the ID again. They do not reuse a connection reference captured
-when the request arrived.
+Completions look up their connection ID again. Only Reactor callbacks modify
+connection, request, and session maps. See [Networking](networking.md) and
+[Database](database.md).
 
 ## Disconnects and EOF
 
-A disconnect callback removes the session and that connection's application queue.
-Waiting requests
-are discarded and release their global slots. A task already submitted to the pool
-may still finish. Its completion releases its slot, finds no connection queue, and
-discards the response and any authentication result. A committed message's
-notification is still routed to online recipients. Disconnect does not cancel or
-roll back work already performed by a handler.
+Disconnect removes the session and waiting payloads. Submitted work can still
+commit. Its completion releases its slot and discards the closed connection's
+response and authentication effect; a committed notification can still reach
+other users. Disconnect does not cancel or roll back work already executing.
 
-A TCP FIN closes only the peer's sending direction. Clients using piped input still
-need their replies after sending FIN. `RequestDispatcher` therefore calls
-`defer_close()` while the connection has application work. After the final result,
-it calls `resume_close()`, which applies pending sends before allowing EOF to close
-the connection. Output that cannot be sent immediately still uses `EPOLLOUT`.
+An orderly FIN retains the connection while complete requests run, using
+`defer_close()` and `resume_close()`. Final output flushes before close.
+Resets close immediately. A trailing incomplete frame is logged and excluded
+from dispatch without losing replies to preceding complete frames.
 
-Socket errors such as a reset close the connection immediately. The deferred-close
-flag keeps an orderly half-close alive; it does not prevent error cleanup.
+## Errors
 
-An EOF with an incomplete trailing frame is logged as `truncated_frame`. The
-connection records this state while returning all complete frames already read.
-Those requests enter the dispatcher normally, including when the last complete
-frame ends exactly on a receive-batch boundary. The existing deferred-close path
-lets their workers finish and flush replies before closing with the truncation
-reason. The partial frame is never submitted as a task or parsed as JSON.
+All responses pass through the same serialization and 64 KiB check, including
+`ProtocolError` responses and exception fallbacks. An oversized response becomes
+a correlated `response_too_large` error. Oversized notifications are not routed.
+Failed serialization and unexpected handler exceptions become
+`internal_error` with `Request processing failed`.
 
-## Failures
+Error responses advance the queue normally, allowing the next request to run.
+The pool also catches standalone task exceptions so a throwing task does not
+remove a worker. Effects from failed or oversized results are discarded; already
+committed database records remain intact.
 
-Malformed envelopes keep the existing protocol error behavior. They are parsed on
-a worker and still advance the connection's queue after their error response.
-
-All worker responses use the same serialization and 64 KiB size check, including
-responses built from `ProtocolError` and the `internal_error` fallback. An oversized
-result becomes a correlated `response_too_large` error before it is posted to the
-Reactor. The limit counts serialized bytes, including escaped error messages;
-exactly 65,536 bytes is allowed. This advances the request queue normally and keeps
-both the connection and the event loop running. The framing library retains its
-own length check for other callers.
-
-Notifications use the same frame limit. An oversized notification produces
-`response_too_large` and is not routed. Message text is limited to 4,096 bytes so
-normal notifications fit even when JSON must escape every character.
-
-An unexpected handler exception or response serialization failure is logged and
-becomes a correlated `internal_error` response with the message
-`Request processing failed`. This also covers invalid UTF-8 in a `ProtocolError`
-message. The next request can then run. The pool also catches exceptions from
-standalone tasks so one throwing task does not remove a worker.
-
-`post()` callbacks must remain short and non-blocking. Unexpected exceptions from
-these callbacks leave `run()` after connection and pending-queue cleanup. Blocking
-service work belongs in the worker handler, not a completion callback.
-
-## Lifetime and Shutdown
-
-Construct the server before the dispatcher, install its message and disconnect
-callbacks, then call `run()`. When using a separate Reactor thread, stop and join
-that thread before destroying the dispatcher.
-
-The executable blocks SIGINT and SIGTERM before workers start and passes a
-`signalfd` to the Reactor. Receiving either signal calls `stop()` from the event
-loop, following the same cleanup path as an ordinary stop request. HTTP is stopped
-and joined after the Reactor returns; the dispatcher is then destroyed. The final
-`server_stopped` log is emitted only after all HTTP and TCP workers have joined.
-
-Shutdown proceeds as follows:
-
-1. `stop()` wakes the Reactor and stops network processing.
-2. Reactor cleanup closes connections and invokes their disconnect callbacks.
-3. Queued sends and completions are discarded; later `send()` and `post()` calls
-   are ignored.
-4. Destroying the dispatcher shuts down its pool, finishes already submitted
-   tasks, and joins workers while the handler and server still exist.
-5. The server and service dependencies can then be destroyed.
-
-The pool drains its own accepted tasks. Requests still waiting in per-connection
-queues are not pool tasks and are discarded during disconnect cleanup. Shutdown
-does not promise delivery of pending responses. A handler that blocks indefinitely
-also prevents its worker from joining; handlers must eventually return.
+Reactor callbacks must be short and non-blocking. An unexpected exception from
+`post()` callbacks leaves `run()` after network cleanup.
 
 ## Replay Tasks
 
-The Reactor binds a session before scheduling its first pending-message query.
-`RequestHandler::pending_messages()` runs on a worker and returns at most 16
-serialized notifications totaling 128 KiB with frame headers. The dispatcher
-checks these limits on the worker before posting the result to the Reactor.
-The Reactor routes it only to the same connection that requested it.
-A disconnected connection's late replay result is discarded.
+The first query runs after the Reactor binds the authenticated session. Workers
+return at most 16 serialized notifications totaling 128 KiB with frame headers.
+The dispatcher validates these limits before posting the result.
 
-A replay query occupies one global and per-connection request slot and is the
-only active task for that connection. Ordinary requests wait behind it. When its
-result arrives, normal request processing resumes without waiting for ACKs;
-the Reactor retains only the batch's IDs. Each successful ACK removes its ID,
-and the last one schedules the next query. Duplicate and unrelated ACKs leave
-the current window unchanged. Idle connection state remains until disconnect,
-so waiting for ACKs needs no worker, timer, or additional queue.
+A query is the connection's sole active task. After it finishes, normal requests
+resume while the Reactor retains only the current batch's IDs. Successful ACKs
+remove IDs; acknowledging the last schedules the next query. Duplicate or
+unrelated ACKs do not change the window. Waiting for ACKs consumes no worker.
 
-New online sends use the existing routing path during replay. The same persisted
-message can appear in both paths, so clients deduplicate display and acknowledge
-every copy. A query or serialization failure closes only that connection and
-leaves unacknowledged rows available for reconnect. The console coordinates
-terminal requests and automatic ACKs with a send mutex.
+Late results for a disconnected connection are discarded. Online sends can
+overlap replay, so clients deduplicate display and ACK every copy. Query or
+serialization failures close only that connection and retain pending records.
+See [Messaging](messaging.md#acknowledgments-and-offline-replay).
 
-## Verification
+## Shutdown
 
-The tests use promises and shared futures rather than timing sleeps. A blocked
-handler proves that another connection can still receive a response, while a
-second request on the blocked connection cannot start early. Other tests cover
-ordered replies after FIN, resets during active work, handler exceptions, shutdown
-with an active task, fixed worker count, and draining the pool queue.
-Capacity tests also cover overload isolation, dropping waiting requests, retaining
-submitted tasks after disconnect, reusing released slots, and errors with a budget
-of one request.
-Notification tests cover a disconnected sender, a recipient changing connections
-during active work, and oversized results that must not reach recipients.
+Dependencies must outlive their tasks and callbacks. Construct the server before
+the dispatcher; stop and join a separately running Reactor before destroying the
+dispatcher.
 
-```bash
-./build/tests/chatroom_tests "[thread_pool]"
-./build/tests/chatroom_tests "[dispatcher]"
-```
+The executable handles SIGINT and SIGTERM through signalfd:
+
+1. Stop the Reactor, close connections, and drop waiting requests and queued output.
+2. Stop and join HTTP while its dependencies still exist.
+3. Destroy the dispatcher, drain already submitted TCP tasks, and join its pool.
+4. Destroy services and the server, then log `server_stopped`.
+
+The pool drains accepted tasks, not payloads still waiting in per-connection
+queues. Workers must eventually return for joining to finish. Shutdown does not
+guarantee pending response delivery; persisted unacknowledged messages replay
+after authentication.

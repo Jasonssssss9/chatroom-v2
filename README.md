@@ -1,239 +1,149 @@
-# chatroom-server-v2
+# chatroom-v2
 
-A chat server and command-line client for Linux, written in C++17.
+A C++17 chat application for Linux, with a command-line client and a server built on non-blocking TCP, epoll, and the Reactor pattern. It supports private messages, multi-recipient messages, group chat, and streamed file transfers. HTTP handles registration, login, and JWT issuance; MySQL stores users, groups, messages, and file metadata. Delivery acknowledgments and offline replay keep unconfirmed messages available after reconnecting.
 
-The server uses non-blocking TCP, epoll, and the Reactor pattern for real-time
-chat, HTTP and JWT for authentication, and MySQL for users, groups, and messages.
-Files are stored on disk, with metadata and download permissions in MySQL.
+## Run
 
-The server and client network layers are implemented. The server accepts JSON
-requests for ping, authentication, private and group chat, member queries, and
-acknowledgments, and returns structured errors. The command-line client provides registration, login,
-and chat commands, with raw JSON available for debugging.
-Application requests run in order for each connection on a configurable worker
-pool (four threads by default). Their results return to the Reactor for socket output.
-JSON configuration, command-line overrides, environment-based credentials, and
-structured server logs are implemented.
-MySQL connections, prepared statements, transactions, and persistence for users,
-groups, messages, acknowledgments, and file metadata are implemented. The server
-checks database connectivity at startup. HTTP registration, login, password hashing,
-and JWT issuance are implemented. TCP verifies JWTs and binds users to connections,
-with one online connection per user. Private messages and multi-recipient sends
-are persisted before online notifications. Clients acknowledge deliveries, and
-authentication triggers bounded replay of unacknowledged messages. Groups support
-creation, paginated group listings, member queries, and persisted broadcast.
-HTTP file uploads and downloads are streamed, with authenticated access and
-ACK-able online and offline notifications.
+Run the following commands from the repository root. The setup below targets Ubuntu 24.04, including WSL2. You need CMake 3.20+, MySQL 8.0+, and OpenSSL 3.0+.
 
-## Project Layout
-
-```text
-server/
-    CMakeLists.txt   Server build configuration
-    src/            Server source code
-client/
-    CMakeLists.txt   Client build configuration
-    src/            Command-line client source code
-common/             Protocol, framing, logging, and small resource utilities
-tests/              Catch2 tests
-cmake/              Shared third-party dependency configuration
-config/             Example configuration files
-sql/                Database schema scripts
-docs/               Design and usage documentation
-```
-
-See [Architecture](docs/architecture.md) for the design and project conventions,
-[Networking](docs/networking.md) for the network API, and [JSON Protocol](docs/protocol.md)
-for request fields, response examples, errors, and the mapping from v1.
-The [threading guide](docs/threading.md) explains task queues, ownership, ordering,
-and shutdown with active work.
-See [Configuration and Logging](docs/configuration.md) for settings, environment
-variables, startup options, and log fields.
-See [MySQL Persistence](docs/database.md) for setup, schema, database operations,
-connection ownership, and integration tests.
-See [Authentication](docs/authentication.md) for registration, login, JWTs,
-TCP sessions, HTTP settings, and examples.
-See [Messaging](docs/messaging.md) to chat between two command-line clients and
-understand persistence, retries, and online delivery.
-See [Command-Line Client](docs/client.md) for commands and display options.
-See [Group Chat](docs/groups.md) for group commands, permissions, and delivery snapshots.
-See [File Transfers](docs/files.md) for storage configuration, schema migration,
-HTTP endpoints, console commands, and notification delivery.
-See [Connection Keepalive](docs/keepalive.md) for automatic heartbeats, idle cleanup,
-and login expiration reminders.
-See [Integration Verification](docs/testing.md) for full workflows, restart recovery,
-file regression tests, sanitizers, and standalone client verification.
-See [Concurrency and Performance](docs/performance.md) for reproducible load tests,
-measurement definitions, and results from the local test environment.
-
-## Building
-
-Requirements: Linux, a C++17 compiler, CMake 3.20 or later, and Git.
-Building the server also requires pkg-config, the MySQL client development library,
-and OpenSSL 3.0 or later (`sudo apt install pkg-config libmysqlclient-dev libssl-dev`
-on Ubuntu).
-The first configuration requires access to GitHub to download pinned versions of
-nlohmann/json, cpp-httplib, and Catch2.
+### 1. Install dependencies
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+sudo apt update
+sudo apt install build-essential cmake git pkg-config libmysqlclient-dev \
+  libssl-dev openssl mysql-server mysql-client
+sudo systemctl start mysql
+```
+
+If WSL does not use systemd, start MySQL with `sudo service mysql start` instead. CMake downloads pinned third-party dependencies from GitHub during the first configuration.
+
+### 2. Set up MySQL
+
+Choose a database password and replace the placeholder below. For an existing account, keep its current password and skip account creation.
+
+```bash
+sudo mysql <<'SQL'
+CREATE DATABASE IF NOT EXISTS chatroom CHARACTER SET utf8mb4;
+CREATE USER IF NOT EXISTS 'chatroom'@'127.0.0.1'
+  IDENTIFIED BY 'replace-with-your-password';
+GRANT ALL PRIVILEGES ON chatroom.* TO 'chatroom'@'127.0.0.1';
+SQL
+
+mysql --protocol=TCP -h 127.0.0.1 -u chatroom -p chatroom < sql/schema.sql
+```
+
+If you have a database from an older version, check the [migration instructions](docs/database.md#upgrading-an-existing-database) before starting the server.
+
+### 3. Build
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_DATABASE_TESTS=OFF
 cmake --build build -j2
-ctest --test-dir build --output-on-failure
 ```
 
-The build provides these targets:
+This produces separate executables: `build/server/chatroom_server` and `build/client/chatroom_client`.
 
-| Target | Configuration | Description |
-| --- | --- | --- |
-| `chatroom_common` | `common/CMakeLists.txt` | Shared protocol, framing, logging, and resource utilities |
-| `chatroom_net` | `server/CMakeLists.txt` | Server network library |
-| `chatroom_app` | `server/CMakeLists.txt` | Configuration, sessions, request dispatcher, handlers, and worker pool |
-| `chatroom_db` | `server/CMakeLists.txt` | MySQL connections, transactions, and chat persistence |
-| `chatroom_auth` | `server/CMakeLists.txt` | Password hashing, registration, login, and JWT issuance and verification |
-| `chatroom_http` | `server/CMakeLists.txt` | HTTP authentication, file transfers, and request logging |
-| `chatroom_server` | `server/CMakeLists.txt` | TCP chat and HTTP authentication server |
-| `chatroom_client_net` | `client/CMakeLists.txt` | Blocking TCP client library |
-| `chatroom_client_app` | `client/CMakeLists.txt` | HTTP authentication, streamed file transfers, and console commands |
-| `chatroom_client` | `client/CMakeLists.txt` | Command-line chat client |
-| `chatroom_tests` | `tests/CMakeLists.txt` | Catch2 tests, automatically registered with CTest |
-| `chatroom_database_tests` | `tests/CMakeLists.txt` | Optional MySQL and HTTP integration tests (`BUILD_DATABASE_TESTS=ON`) |
-
-To build without tests or the Catch2 dependency:
+### 4. Start the server
 
 ```bash
-cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
-cmake --build build-release -j2
-```
-
-To configure only the server or only the client, with tests disabled:
-
-```bash
-cmake -S . -B build-server -DBUILD_CLIENT=OFF -DBUILD_TESTING=OFF
-cmake --build build-server -j2
-
-cmake -S . -B build-client -DBUILD_SERVER=OFF -DBUILD_TESTING=OFF
-cmake --build build-client -j2
-```
-
-The server and client run as separate executables and communicate over the
-network. Shared code contains the protocol, framing, logging, and small resource utilities. Each component's
-dependencies belong in its own `CMakeLists.txt`; shared dependencies belong in
-`cmake/Dependencies.cmake`.
-
-Both components use the same pinned cpp-httplib release. The server additionally
-uses jwt-cpp and system OpenSSL libraries. The standalone client requires no
-MySQL, jwt-cpp, or OpenSSL development files.
-
-## Running the Server
-
-Set up MySQL and import `sql/schema.sql` as described in the
-[database guide](docs/database.md), then supply the password in the current shell:
-
-```bash
+export CHATROOM_DB_HOST=127.0.0.1
+export CHATROOM_DB_PORT=3306
+export CHATROOM_DB_NAME=chatroom
+export CHATROOM_DB_USER=chatroom
 read -r -s -p 'Database password: ' CHATROOM_DB_PASSWORD
 printf '\n'
 export CHATROOM_DB_PASSWORD
 export CHATROOM_JWT_SECRET="$(openssl rand -hex 32)"
 ./build/server/chatroom_server
-./build/server/chatroom_server --address 0.0.0.0 --port 8081 --workers 4
-./build/server/chatroom_server --max-connections 512
-./build/server/chatroom_server --idle-timeout 90
-cp config/server.example.json config/server.json
-./build/server/chatroom_server --config config/server.json
 ```
 
-The default address is `127.0.0.1:8081`. Port `0` lets the operating system choose
-an available port, which appears in the `server_started` JSON log on standard error.
-Use `--help` to list options and Ctrl+C to terminate the server. Database passwords
-and JWT secrets are read from `CHATROOM_DB_PASSWORD` and `CHATROOM_JWT_SECRET`.
-Startup checks database credentials and requires a JWT secret of at least 32 bytes.
-HTTP defaults to port 8080; `--http-port` and `--http-workers` configure its listener.
-See the
-[configuration guide](docs/configuration.md) for the full precedence rules.
+Wait for the `server_started` JSON log. The default listeners are TCP `127.0.0.1:8081` and HTTP `127.0.0.1:8080`. Stop the server with Ctrl+C. When restarting, reuse the same JWT secret to keep existing tokens valid. Run from the same directory to retain access to files under `data/files/`.
 
-The default active-connection limit is 1024. Excess connections are closed; if
-accepting runs out of descriptors or socket memory, the Reactor retries after
-200 ms while continuing to serve established connections. Choose the connection
-limit with room for other file descriptors; it does not raise the OS limit.
+Use `--help` for options or `--config config/server.example.json` to load the example configuration. See [Configuration](docs/configuration.md) for all settings.
 
-Idle TCP connections expire after 90 seconds without a complete incoming frame.
-The console sends a heartbeat every 30 seconds and waits up to 60 seconds for its
-pong. Both sides have configurable timeouts. Expired logins prompt `/login` again
-without closing a responsive connection. See [Connection Keepalive](docs/keepalive.md).
+## Verify
 
-Request admission defaults to 32 unfinished requests per connection and 1024 in
-total. Use `--max-requests-per-connection` and `--max-pending-requests`, or the JSON
-settings, to change them. Exceeding either limit closes that connection and drops
-its waiting requests. Submitted tasks keep their global slots until completion,
-even after disconnect. See [Request Capacity](docs/threading.md#request-capacity).
+### 1. Register and log in
 
-Each request is a four-byte unsigned payload length in network byte order followed
-by UTF-8 JSON. A request must include `type`, `request_id`, and `action`; `data` is
-an optional object. Authentication, private and group messages, membership queries,
-and acknowledgments use the same envelope. Invalid requests receive
-structured error responses. JSON nesting is limited to 64 levels, counting the
-root object as level 1; oversized frames close the connection. See the
-[protocol reference](docs/protocol.md) for the complete format. Plain text sent
-with a terminal tool is not a framed request.
-
-Run all tests with CTest, or select the networking tests directly:
+Open two more terminals at the repository root. In Alice's terminal, create a sample file and start the client:
 
 ```bash
-./build/tests/chatroom_tests "[server]"
-```
-
-## Running the Client
-
-Start the server, then open another terminal:
-
-```bash
+printf 'Hello from Alice.\n' > /tmp/chatroom-demo.txt
 ./build/client/chatroom_client
-./build/client/chatroom_client 127.0.0.1 8081
 ```
 
-The default destination is `127.0.0.1:8081`, with HTTP on port 8080. Addresses must
-be numeric IPv4 addresses. Add an HTTP port as the third positional argument when
-needed: `chatroom_client 127.0.0.1 8081 8080`.
+Enter these commands in the client:
 
 ```text
 /register alice example-password
 /login alice example-password
-/send 2 Hello Bob
-/send 2,3 Hello everyone
-/create_group "Study group" 2,3
+```
+
+Start `./build/client/chatroom_client` in Bob's terminal, then enter:
+
+```text
+/register bob example-password
+/login bob example-password
+```
+
+Registration prints each user's ID. If the accounts already exist, log in with their existing passwords. Wait for `Authenticated as user ...` before continuing. Replace every `<...>` placeholder below with the actual numeric ID; do not type the angle brackets.
+
+### 2. Send messages and create a group
+
+In Alice's client:
+
+```text
+/send <bob-id> Hello Bob
+/send <alice-id>,<bob-id> Hello both
+/create_group "Study group" <bob-id>
+```
+
+Bob receives the messages automatically. Use the group ID printed by `/create_group` in Alice's client:
+
+```text
+/send_group <group-id> Hello everyone
+```
+
+In Bob's client:
+
+```text
 /groups
-/members 42
-/send_group 42 Hello group
-/upload 2 "./notes final.pdf"
-/download 42 "./received notes.pdf"
-/ping
-/help
+/members <group-id>
+/send_group <group-id> Hi Alice
 ```
 
-Registration prints the new user ID; use actual recipient IDs in `/send`. Login
-automatically authenticates TCP without displaying the JWT. Messages and errors
-appear as readable text, and the client automatically acknowledges deliveries.
-See the [client guide](docs/client.md) for quoted credentials, limits, and JSON
-debugging, or the [two-client walkthrough](docs/messaging.md) to try a conversation.
+### 3. Transfer a file
 
-Use `/quit` to cancel pending I/O and exit immediately. End standard input with
-Ctrl+D to finish sending and wait for the server's final replies. The client also
-exits when the server disconnects, without requiring another line of input.
+In Alice's client:
 
-Requests can also be piped into the client:
+```text
+/upload <bob-id> "/tmp/chatroom-demo.txt"
+```
+
+Use the file ID from Bob's notification:
+
+```text
+/download <file-id> "/tmp/chatroom-demo-received.txt"
+```
+
+The destination must not already exist. In another shell, verify the bytes:
 
 ```bash
-printf '%s\n' '/ping' | ./build/client/chatroom_client
+cmp /tmp/chatroom-demo.txt /tmp/chatroom-demo-received.txt
 ```
 
-To run only the client network tests:
+No output means the files match.
+
+### 4. Check offline delivery and restart recovery
+
+Enter `/quit` in Bob's client, then send him another message from Alice. Restart Bob's client and run `/login bob example-password`. The pending message appears automatically; the client acknowledges it. Reconnect again to check that confirmed deliveries are no longer replayed.
+
+Stop and restart the server in its original terminal with `./build/server/chatroom_server`, keeping the same environment and working directory. Restart both clients and log in again. `/groups` and `/download` should still find the saved group and file. Use a new download destination. `/help` lists all client commands; `/quit` exits.
+
+### 5. Run automated tests
 
 ```bash
-./build/tests/chatroom_tests "[client]"
+ctest --test-dir build --output-on-failure
 ```
 
-To run protocol and request-handler tests:
-
-```bash
-./build/tests/chatroom_tests "[protocol]"
-```
+This runs the ordinary Catch2 suite without MySQL. The [testing guide](docs/testing.md) covers the separate disposable database, full integration tests, restart checks, and a standalone client build. See the [documentation index](docs/README.md) for protocol, architecture, and performance details.

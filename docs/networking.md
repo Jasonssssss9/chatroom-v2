@@ -1,212 +1,135 @@
 # Networking
 
+The network layer uses Linux socket APIs directly. The server runs a single
+edge-triggered epoll Reactor; application work runs on workers.
+
 ## Components
 
 | Component | Responsibility |
 | --- | --- |
-| `UniqueFd` | Owns a file descriptor and closes it on destruction; moving transfers ownership |
-| `Socket` | Creates IPv4 listeners, accepts connections, and wraps Linux receive/send calls |
-| `Epoll` | Owns the epoll instance and registers, updates, removes, and waits for events |
-| `FrameDecoder` | Extracts length-prefixed payloads while retaining incomplete input |
-| `RequestHandler` | Validates and dispatches application JSON requests separately from socket I/O |
-| `RequestDispatcher` | Submits one request per connection to workers and applies completions on the Reactor |
-| `TcpConnection` | Owns one client's socket, input decoder, and buffered output |
-| `TcpServer` | Runs the Reactor, manages connections, and invokes application callbacks |
-| `TcpClient` | Owns one blocking IPv4 connection and sends or receives complete frames |
-| `AuthClient` | Performs HTTP registration and login on the input thread |
-| `ConsoleClient` | Handles commands, reply display, ACKs, heartbeats, and thread shutdown |
+| `UniqueFd` | Move-only descriptor ownership and automatic close |
+| `Socket` | IPv4 listeners, accepted sockets, and send/receive calls |
+| `Epoll` | Event registration, updates, removal, and waits |
+| `FrameDecoder` | Length-prefixed payloads and incomplete input |
+| `TcpConnection` | One socket, input decoder, and buffered output |
+| `TcpServer` | Reactor, connections, application callbacks, and cross-thread wakeups |
+| `TcpClient` | One blocking connection with framed send/receive |
 
-The implementation uses Linux socket APIs directly. Server sockets are non-blocking
-and close on exec. ET handlers accept, read, or write until `EAGAIN`; `EINTR` retries
-the interrupted operation. Writes use `MSG_NOSIGNAL` so a closed peer cannot terminate
-the process with `SIGPIPE`. The executable uses the [JSON protocol](protocol.md)
-on top of this byte-oriented network layer; network tests may use simple echo
-callbacks independently of the application handler.
+Server sockets are non-blocking and close-on-exec. Accept, read, and write
+handlers drain until `EAGAIN`; `EINTR` retries the operation. Writes use
+`MSG_NOSIGNAL` to avoid process termination when a peer closes.
 
-Startup and epoll failures use `std::system_error`. A connection's read, write,
-framing, or message-handler failure is reported as a JSON log on standard error
-and closes that connection. Connection events include the connection ID and peer
-address so request errors can be traced back to a client. Disconnect handlers
-should not throw. See [Configuration and Logging](configuration.md).
+Startup and epoll failures throw `std::system_error`. Connection-level I/O,
+framing, or message-callback failures are logged and close the affected
+connection. Disconnect callbacks must not throw.
 
 ## Accept Errors and Connection Capacity
 
-The server keeps at most `server.max_connections` active connections, defaulting
-to 1024. A newly accepted socket above that limit is closed immediately and logged
-as `connection_rejected`. Existing clients keep their connections. Rejected sockets
-are never registered with epoll or passed to application handlers.
+The default active-connection limit is 1024. An accepted socket above the limit
+is closed and logged as `connection_rejected`, without reaching epoll or
+application handlers. Existing connections continue normally.
 
-Choose this limit below the process's available file-descriptor budget. The listener,
-epoll instance, eventfd, standard streams, and future database or file operations
-also need descriptors. The setting does not change the operating system's FD limit.
+This limit does not raise the process's file-descriptor limit. Leave capacity for
+listeners, epoll, eventfd, database connections, and open files.
 
-`EINTR`, aborted connections, and pending network errors from `accept4()` retry the
-accept loop. `EAGAIN` ends the current batch. If `accept4()` reports `EMFILE`,
-`ENFILE`, `ENOBUFS`, or `ENOMEM`, the Reactor records `accept_paused`, removes the
-listener from epoll, and schedules another attempt after 200 ms. Other errors still
-leave `run()` as exceptions.
+The accept loop retries interrupted, aborted, and pending network errors.
+`EAGAIN` finishes the batch. Resource errors `EMFILE`, `ENFILE`, `ENOBUFS`,
+and `ENOMEM` log `accept_paused`, remove the listener from epoll, and schedule
+a retry after 200 ms. Other errors leave `run()` as exceptions.
 
-The Reactor uses the nearest idle-scan or accept-retry deadline for `epoll_wait()`.
-It continues
-to process established connections, completions, and `stop()` notifications; it
-does not sleep or start a timer thread. The deadline is checked after every wait,
-including waits that return other events. At the deadline it restores the listener
-and explicitly calls `accept4()` again, so recovery does not depend on a new ET
-notification. Another resource failure schedules another delayed attempt.
+The retry shares the epoll timeout with idle scans, so existing I/O, completions,
+and stop requests continue. At the deadline, the Reactor restores the listener
+and explicitly accepts again; recovery does not depend on another ET event.
+A repeated resource failure schedules another retry. New clients can wait in
+the kernel backlog during the pause even if their TCP connect succeeds.
 
-During a resource pause, new clients may wait in the kernel backlog even if their
-TCP connect succeeds. They can exchange application data after accepting recovers.
-The connection limit and resource retry handle connection admission. Application
-request admission is handled by the [dispatcher limits](threading.md#request-capacity).
+Application request limits are separate; see
+[Request Capacity](threading.md#request-capacity).
 
-## Framing and Limits
+## Framing and Buffered I/O
 
-A frame has a four-byte unsigned length in network byte order followed by exactly
-that many payload bytes. Payloads are limited to 64 KiB. The framing library handles
-bytes, including empty payloads and embedded zero bytes; the application validates
-JSON separately.
+A frame contains a four-byte unsigned big-endian length and that many bytes,
+with a maximum payload of 65536 bytes. The framing layer accepts empty and
+binary payloads; the application separately requires UTF-8 JSON.
 
-The decoder accepts fragmented headers, fragmented payloads, and multiple frames
-in one receive. `TcpConnection::receive()` returns at most 16 frames at a time.
-After a full batch, the Reactor calls it again immediately, processing frames
-already in the decoder before reading more bytes. It continues until `EAGAIN` or
-EOF, allowing request limits to be checked between batches. If a message callback
-closes the connection, the Reactor discards the rest of that batch and stops reading
-it. A direct caller of `receive()` must also drain full batches before waiting for
-another readiness event.
+The decoder handles fragmented headers, fragmented bodies, and multiple frames
+per read without dropping trailing input. `TcpConnection::receive()` returns at
+most 16 complete frames per batch. After a full batch, the Reactor immediately
+calls again until `EAGAIN` or EOF, checking request admission between batches.
+Direct users of `receive()` must follow the same draining rule. If a callback
+closes the connection, the remaining batch is discarded.
 
-Consuming a frame never discards trailing input. Each connection
-limits its unsent output buffer to 1 MiB; exceeding that limit closes the connection.
-`EPOLLOUT` is enabled only while output remains buffered.
+Each connection permits at most 1 MiB of unsent output. Exceeding it closes that
+connection. `EPOLLOUT` is enabled only while output is pending. Complete
+incoming frames refresh the idle deadline; see [Keepalive](keepalive.md).
 
-## Thread Ownership
+## Reactor Ownership
 
-Configure the message and disconnect handlers before calling `run()`. They execute
-on the Reactor thread and should return promptly. The executable wires them to
-`RequestDispatcher`, which runs parsing, application work, and serialization on a
-fixed worker pool. See [Worker Pool and Request Handoff](threading.md).
+Install handlers before `run()`. Message and disconnect handlers execute on
+the Reactor thread and must return promptly. The application's message callback
+hands payloads to `RequestDispatcher` for worker-side processing.
 
-Only the Reactor thread accesses connections and their buffers. `send(id, payload)`
-can be called from another thread: it copies and frames the payload, puts it in a
-mutex-protected queue, and wakes the loop through `eventfd`. Connection IDs increase
-for each accepted connection and are stored in epoll events. A delayed result for
-a closed connection is discarded even if its socket number has been reused.
+| API | Thread contract |
+| --- | --- |
+| `send(id, payload)` | Thread-safe; frames and queues output, then wakes eventfd |
+| `post(callback)` | Thread-safe; queues a short Reactor callback through eventfd |
+| `stop()` | Thread-safe; wakes and stops the loop |
+| `close_connection(id, reason)` | Reactor-only; closes and invokes disconnect immediately |
+| `defer_close(id)`, `resume_close(id)` | Reactor-only; retain a half-closed connection for final replies |
 
-`send()` queues output; it does not confirm delivery to the peer. Senders that need
-an application-level ordering rule must submit their results in that order. The
-dispatcher guarantees this for requests on one connection.
+Only the Reactor accesses connections and their buffers. Monotonically increasing
+connection IDs are stored in epoll events, so a late result cannot reach a new
+connection that reused an old socket number. Sends for closed IDs are discarded.
 
-`post(callback)` queues a short callback on the same eventfd-backed wakeup path.
-Callbacks execute on the Reactor and must not perform blocking work. Captured
-objects must outlive the event loop. Application completions use this API to look
-up the connection ID again and advance the corresponding request queue.
+`send()` confirms queueing, not delivery. Producers must supply any required
+ordering; the dispatcher does so per connection. `post()` callbacks must not
+block, and captured dependencies must outlive the loop. Generic cross-thread
+queues have no independent capacity limit; application admission rules bound
+the request pipeline.
 
-`close_connection(id, reason)` is Reactor-only. It removes the connection and
-invokes the disconnect handler immediately. The dispatcher uses it for overload
-cleanup; worker threads must not call it.
+## EOF and Shutdown
 
-## Connection and Server Shutdown
+An orderly FIN closes only the peer's sending direction. Complete final frames
+still enter dispatch. While work remains, `defer_close()` retains the connection;
+the final completion calls `resume_close()` to flush queued replies before
+closing. Socket errors, including resets, close immediately.
 
-When the peer shuts down its write side, complete final frames are processed.
-The dispatcher calls `defer_close()` while application requests remain, so EOF
-does not drop their asynchronous replies. Its final completion calls `resume_close()`
-to flush queued output and allow the connection to close. These two methods are
-Reactor-only. Socket errors still close the connection immediately.
+EOF with an incomplete trailing header or payload logs one `truncated_frame`
+warning. Complete preceding frames still receive ordered replies, including at
+receive-batch boundaries. The partial frame is never parsed and receives no
+JSON error. The final close reason is `truncated_frame`; EOF between complete
+frames closes normally as `peer_closed`.
 
-At EOF, `TcpConnection` checks whether the decoder still holds an incomplete
-header or payload. It marks `truncated_frame()` without throwing away complete
-frames from the same batch. The Reactor logs one `connection_error` warning with
-code `truncated_frame`, connection ID, and peer address. Only complete frames reach
-the application. Their pending replies follow the same deferred-close path; after
-they are flushed, the connection closes with reason `truncated_frame` instead of
-`peer_closed`. EOF between frames remains an ordinary half-close without a warning.
-The incomplete trailing bytes do not receive a JSON error response.
+Run a server instance once. `stop()` closes active connections and discards
+pending output and callbacks; later `send()` and `post()` calls are ignored.
+Join the event loop and all producers before destroying the server.
 
-Call `stop()` from a normal thread to wake the loop and stop it. Shutdown closes
-active connections and does not drain pending output. Run each server instance
-once. Pending callbacks are discarded, and later `send()` and `post()` calls are
-ignored. Join the loop and worker threads before destroying the server.
+The executable blocks SIGINT and SIGTERM before creating workers. A
+non-blocking `signalfd` passes those signals to epoll, where they log
+`shutdown_requested` and call `stop()`. No asynchronous signal handler runs
+application code. After the Reactor returns, HTTP stops and joins, then the
+dispatcher drains submitted TCP tasks and joins workers. Waiting per-connection
+requests are discarded. `server_stopped` follows worker shutdown.
 
-The executable blocks SIGINT and SIGTERM before creating workers, which inherit
-the signal mask. A non-blocking, close-on-exec `signalfd` turns these signals into
-an epoll event passed to `run()`. The Reactor logs `shutdown_requested` and calls
-`stop()` on its own thread. No asynchronous signal handler calls application code.
-The mask stays blocked through teardown, so another signal does not interrupt
-cleanup. After the Reactor closes connections, the executable stops and joins
-the HTTP service, then destroys the dispatcher and waits for submitted TCP tasks.
-Requests still waiting in per-connection queues are discarded. `server_stopped`
-is logged after all workers have joined, and the process exits successfully.
-Queued responses and notifications are not drained during shutdown; persisted
-deliveries remain available for later acknowledgment or replay.
+Shutdown does not promise to flush replies or notifications. Persisted,
+unacknowledged deliveries remain available after reconnecting.
 
 ## Client Networking
 
-`TcpClient` connects in its constructor. One thread may call `send()` while another
-calls `receive()`. Multiple concurrent senders or receivers are not supported.
-The library handles framing without interpreting JSON. It retries interrupted I/O,
-completes partial writes, and retains incomplete or consecutive replies. A clean
-EOF returns no message; EOF in the middle of a frame reports an error.
+`TcpClient` connects in its constructor using numeric IPv4. Establishment is
+blocking and uses the operating system's timeout. Create a new instance to
+reconnect.
 
-`finish_sending()` sends FIN while keeping the receive direction open. `disconnect()`
-uses `shutdown(SHUT_RDWR)` to cancel blocked I/O without closing a descriptor that
-another thread is using. Join I/O threads before destroying the client. Create a
-new instance to reconnect. Connection establishment is blocking and uses the
-operating system's timeout; hostnames and automatic reconnect are not implemented.
+One thread may send while another receives; multiple concurrent senders or
+receivers require external serialization. The library completes partial I/O,
+retries interruptions, and retains incomplete or consecutive frames. Clean EOF
+returns no message; EOF inside a frame reports an error. Writes have a
+five-second socket timeout.
 
-TCP sends have a five-second socket timeout. The console's timer sends automatic
-pings independently of input and HTTP operations and cancels TCP on a missing
-matching pong. A periodic Reactor scan closes idle connections without an extra
-server thread. See [Connection Keepalive](keepalive.md) for both timeouts.
+`finish_sending()` uses `SHUT_WR` while retaining receive access.
+`disconnect()` uses `SHUT_RDWR` to cancel blocked I/O without closing a
+descriptor another thread is using. Join I/O threads before destruction.
 
-The console limits each input line to 64 KiB before JSON validation and sending.
-LF and an optional preceding CR do not count toward that limit. On overflow it
-reports one error immediately and discards the rest of that line, retaining only
-a bounded input buffer. The next line is processed normally; an oversized final
-line is also discarded at EOF. A receive thread
-prints replies and signals an eventfd when it finishes. The input thread polls
-standard input and that eventfd, so remote disconnects also wake terminal input.
-Output is serialized with a mutex. `/quit` cancels I/O immediately; standard-input
-EOF finishes sending and waits for the peer to close after its final replies.
-Ctrl+C uses normal process termination.
-
-Commands use an `AuthClient` for HTTP registration and login. The input thread
-performs these blocking calls while the receiver continues processing messages.
-Login returns a JWT directly to a generated TCP `authenticate` request. The
-client does not display or persist the token. `/send` and `/send_group` generate
-fresh client message IDs. `/create_group` and `/members` manage group creation
-and member queries; `/ping`, `/help`, and `/quit` handle connection checks and
-local control. Normal
-output formats messages and errors; `--json` retains raw payload display.
-See [Command-Line Client](client.md) for syntax and examples.
-
-The receiver recognizes `message` and `file_available` notifications, suppresses recent duplicate IDs,
-and sends `ack_message` after display. It acknowledges duplicate copies too. A
-send mutex serializes automatic ACKs with terminal requests and the EOF half-close;
-the underlying `TcpClient` still requires one sender at a time. The receive thread
-alone owns the bounded history of 1,024 IDs. Server JSON is parsed with the shared
-nesting limit; unexpected payloads are displayed without automatic acknowledgment.
-After stdin EOF, notifications can still be displayed but cannot be acknowledged
-on the half-closed socket. Keep stdin open to receive and acknowledge replay batches.
-
-## Tests
-
-Catch2 tests use local TCP connections and socket pairs. They cover partial frames,
-consecutive messages, UTF-8 byte lengths, embedded zero bytes, frame limits, partial
-writes, output limits, disconnected peers, half-close handling, stale replies,
-cross-thread sends, and loop shutdown. Integration tests bind to port `0` and use
-socket timeouts and futures rather than timing sleeps.
-
-EOF tests cover partial headers, partial payloads, clean half-closes, and complete
-requests followed by a truncated frame at or beyond a receive-batch boundary.
-They verify ordered worker replies, continued service for other clients, and
-exactly one warning with the correct close reason.
-
-Connection-capacity tests verify that excess clients are closed and new clients
-can connect after an active one leaves. FD-exhaustion tests lower `RLIMIT_NOFILE`
-only in an isolated child process. They fill its descriptor table, wait for actual
-pause logs, exercise established I/O and repeated retries, then verify backlog
-recovery and stopping while acceptance remains paused.
-
-Client tests use a raw TCP peer and can run with `BUILD_SERVER=OFF`. They cover
-framed sends, fragmented and consecutive replies, truncated or oversized frames,
-send limits, final replies after FIN, cancellation, and connection failures.
+The console serializes sends and polls stdin alongside a receiver-completion
+eventfd. It joins the receiver and timer threads before returning. See
+[Client](client.md) for commands, input limits, cancellation, and ACK behavior.
