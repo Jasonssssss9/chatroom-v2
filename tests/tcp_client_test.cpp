@@ -4,6 +4,7 @@
 #include "file_client.h"
 #include "pending_file.h"
 #include "temp_directory.h"
+#include "task_gate.h"
 
 #include <arpa/inet.h>
 #include <array>
@@ -526,6 +527,77 @@ TEST_CASE("File download failures remove partial output and report JSON errors",
     if (truncated) CHECK_THROWS_AS(files.download("file-test-token", "7", output), std::runtime_error);
     else CHECK_THROWS_WITH(files.download("file-test-token", "7", output), "file_not_found: File is unavailable");
     CHECK_FALSE(std::filesystem::exists(output));
+}
+
+TEST_CASE("File uploads bound and validate responses while retaining their local source", "[client][http][file]") {
+    int status = 201;
+    std::string body = "{";
+    SECTION("Malformed success JSON") {}
+    SECTION("Wrong ID types") { body = R"({"file_id":7,"message_id":"9"})"; }
+    SECTION("Missing message ID") { body = R"({"file_id":"7"})"; }
+    SECTION("Oversized success body") { body.assign(8193, 'x'); }
+    SECTION("Expired login") {
+        status = 401;
+        body = R"({"error":{"code":"invalid_token","message":"Token is invalid or expired"}})";
+    }
+    SECTION("Non-JSON service error") { status = 503; body = "Unavailable"; }
+    TempDirectory directory;
+    const auto path = directory.path / "source.bin";
+    const std::string bytes("source\0bytes", 12);
+    { std::ofstream file(path, std::ios::binary); file.write(bytes.data(), bytes.size()); }
+    int requests = 0;
+    TestAuthServer server([&](const httplib::Request&, httplib::Response& response) {
+        if (++requests == 1) {
+            response.status = status;
+            response.set_content(body, "application/json");
+        } else {
+            response.status = 201;
+            response.set_content(R"({"file_id":"7","message_id":"9"})", "application/json");
+        }
+    });
+    FileClient files("127.0.0.1", server.port());
+    if (status == 401) {
+        CHECK_THROWS_WITH(files.upload("test-token", path, {"2"}),
+                          "invalid_token: Token is invalid or expired. Use /login to authenticate again.");
+    } else {
+        CHECK_THROWS_AS(files.upload("test-token", path, {"2"}), std::runtime_error);
+    }
+    CHECK(files.upload("test-token", path, {"2"})["file_id"] == "7");
+    std::ifstream source(path, std::ios::binary);
+    CHECK(std::string(std::istreambuf_iterator<char>(source), {}) == bytes);
+}
+
+TEST_CASE("Cancelling a file download removes partial output and allows a later transfer", "[client][http][file]") {
+    TempDirectory directory;
+    const auto path = directory.path / "download.bin";
+    std::promise<void> started;
+    TaskGate release;
+    int downloads = 0;
+    TestAuthServer server([&](const httplib::Request&, httplib::Response& response) {
+        if (++downloads == 1) {
+            response.set_content_provider(100000, "application/octet-stream",
+                [&](std::size_t, std::size_t, httplib::DataSink& sink) {
+                    sink.write("partial", 7);
+                    started.set_value();
+                    release.future.wait_for(3s);
+                    return false;
+                });
+        } else {
+            response.set_content("complete", "application/octet-stream");
+        }
+    });
+    FileClient files("127.0.0.1", server.port());
+    auto transfer = std::async(std::launch::async, [&] { files.download("test-token", "7", path); });
+    REQUIRE(started.get_future().wait_for(2s) == std::future_status::ready);
+    files.stop();
+    const auto finished = transfer.wait_for(2s);
+    release.release();
+    REQUIRE(finished == std::future_status::ready);
+    CHECK_THROWS_AS(transfer.get(), std::runtime_error);
+    CHECK_FALSE(std::filesystem::exists(path));
+    files.download("test-token", "7", path);
+    std::ifstream downloaded(path, std::ios::binary);
+    CHECK(std::string(std::istreambuf_iterator<char>(downloaded), {}) == "complete");
 }
 
 TEST_CASE("Console file commands retain the successful login and acknowledge duplicate file notices", "[client][console][file]") {

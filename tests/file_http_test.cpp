@@ -184,3 +184,114 @@ TEST_CASE("An upload removes disk content when its database transaction fails", 
     CHECK(fixture.count("files") == 0);
     CHECK(fixture.count("messages") == 0);
 }
+
+TEST_CASE("File metadata limits apply before any disk or database writes", "[database][http][file]") {
+    DatabaseFixture fixture;
+    const auto owner = fixture.store.create_user("owner", "test-hash");
+    // Exercise the per-file limit below the listener's 4 KiB minimum body limit too.
+    RunningFiles running(32);
+    httplib::Client client("127.0.0.1", running.http.port());
+    const auto recipients = json::array({std::to_string(owner)});
+    const auto valid = json{{"name", "file.bin"}, {"recipients", recipients}};
+    const std::string deep = R"({"ignored":)" + std::string(64, '[') + "0" + std::string(64, ']') + "}";
+    for (const auto& metadata : {std::string("[]"), json{{"name", "file.bin"}}.dump(),
+                                json{{"recipients", recipients}}.dump(),
+                                json{{"name", "file.bin"}, {"recipients", recipients}, {"ignored", std::string(4097, 'x')}}.dump(), deep}) {
+        auto headers = running.headers(owner);
+        headers.erase("X-File-Metadata");
+        headers.emplace("X-File-Metadata", metadata);
+        const auto response = client.Post("/api/files", headers, "data", "application/octet-stream");
+        REQUIRE(response);
+        CHECK(response->status == 400);
+    }
+    const auto oversized = client.Post("/api/files", running.headers(owner, valid),
+                                       std::string(33, 'x'), "application/octet-stream");
+    REQUIRE(oversized);
+    CHECK(oversized->status == 413);
+    CHECK(running.file_count() == 0);
+    CHECK(fixture.count("files") == 0);
+    CHECK(fixture.count("messages") == 0);
+
+    const std::string name(255, 'n');
+    const auto accepted = client.Post("/api/files", running.headers(owner,
+        {{"name", name}, {"recipients", recipients}}), std::string(32, 'x'), "application/octet-stream");
+    REQUIRE(accepted);
+    REQUIRE(accepted->status == 201);
+    CHECK(json::parse(accepted->body)["name"] == name);
+    CHECK(running.file_count() == 1);
+}
+
+TEST_CASE("File storage errors return errors without stopping later transfers", "[database][http][file]") {
+    DatabaseFixture fixture;
+    const auto owner = fixture.store.create_user("owner", "test-hash");
+    TempDirectory directory;
+    const auto storage = directory.path / "storage";
+    { std::ofstream blocked(storage); blocked << "A file cannot be a storage directory"; }
+    TokenService tokens(std::string(32, 'k'));
+    AuthService auth(tokens);
+    HttpServer server(auth, test_config(), "127.0.0.1", HttpConfig{0, 1}, FileConfig{storage.string(), 1024});
+    server.start();
+    httplib::Client client("127.0.0.1", server.port());
+    const httplib::Headers headers{{"Authorization", "Bearer " + tokens.issue(owner)},
+        {"X-File-Metadata", json{{"name", "notes.bin"}, {"recipients", {std::to_string(owner)}}}.dump()}};
+    const auto failed = client.Post("/api/files", headers, "bytes", "application/octet-stream");
+    REQUIRE(failed);
+    CHECK(failed->status == 500);
+    CHECK(json::parse(failed->body)["error"]["code"] == "internal_error");
+    CHECK(fixture.count("files") == 0);
+    CHECK(fixture.count("messages") == 0);
+
+    std::filesystem::remove(storage);
+    const auto uploaded = client.Post("/api/files", headers, "bytes", "application/octet-stream");
+    REQUIRE(uploaded);
+    REQUIRE(uploaded->status == 201);
+    const auto id = json::parse(uploaded->body)["file_id"].get<std::string>();
+    const auto file = fixture.store.file_for_user(std::stoull(id), owner);
+    REQUIRE(file);
+    const auto path = storage / file->storage_key;
+    { std::ofstream changed(path, std::ios::binary | std::ios::trunc); changed << "shorter metadata mismatch"; }
+    const auto mismatch = client.Get("/api/files/" + id, headers);
+    REQUIRE(mismatch);
+    CHECK(mismatch->status == 500);
+    CHECK(json::parse(mismatch->body)["error"]["code"] == "internal_error");
+    { std::ofstream restored(path, std::ios::binary | std::ios::trunc); restored << "bytes"; }
+    const auto downloaded = client.Get("/api/files/" + id, headers);
+    REQUIRE(downloaded);
+    CHECK(downloaded->status == 200);
+    CHECK(downloaded->body == "bytes");
+    server.stop();
+    CHECK_NOTHROW(server.check());
+}
+
+TEST_CASE("Committed files survive a failure while announcing the upload", "[database][http][file]") {
+    DatabaseFixture fixture;
+    const auto owner = fixture.store.create_user("owner", "test-hash");
+    const auto recipient = fixture.store.create_user("recipient", "test-hash");
+    TempDirectory directory;
+    TokenService tokens(std::string(32, 'k'));
+    AuthService auth(tokens);
+    HttpServer server(auth, test_config(), "127.0.0.1", HttpConfig{0, 1}, FileConfig{directory.path.string(), 1024},
+        [](UserNotification) { throw std::runtime_error("Notification callback failed after commit"); });
+    server.start();
+    httplib::Client client("127.0.0.1", server.port());
+    const httplib::Headers headers{{"Authorization", "Bearer " + tokens.issue(owner)},
+        {"X-File-Metadata", json{{"name", "notes.bin"}, {"recipients", {std::to_string(recipient)}}}.dump()}};
+    const auto response = client.Post("/api/files", headers, "saved bytes", "application/octet-stream");
+    REQUIRE(response);
+    CHECK(response->status == 500);
+    CHECK(fixture.count("files") == 1);
+    CHECK(fixture.count("file_recipients") == 1);
+    CHECK(fixture.count("messages") == 1);
+    CHECK(fixture.count("message_deliveries") == 1);
+    const auto pending = fixture.store.pending_messages(recipient);
+    REQUIRE(pending.size() == 1);
+    REQUIRE(pending[0].file);
+    CHECK(std::filesystem::file_size(directory.path / pending[0].file->storage_key) == 11);
+    const auto downloaded = client.Get("/api/files/" + std::to_string(pending[0].file->id),
+        httplib::Headers{{"Authorization", "Bearer " + tokens.issue(recipient)}});
+    REQUIRE(downloaded);
+    CHECK(downloaded->status == 200);
+    CHECK(downloaded->body == "saved bytes");
+    server.stop();
+    CHECK_NOTHROW(server.check());
+}

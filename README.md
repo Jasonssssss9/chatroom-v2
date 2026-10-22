@@ -61,6 +61,8 @@ See [File Transfers](docs/files.md) for storage configuration, schema migration,
 HTTP endpoints, console commands, and notification delivery.
 See [Connection Keepalive](docs/keepalive.md) for automatic heartbeats, idle cleanup,
 and login expiration reminders.
+See [Integration Verification](docs/testing.md) for full workflows, restart recovery,
+file regression tests, sanitizers, and standalone client verification.
 
 ## Building
 

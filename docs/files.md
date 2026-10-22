@@ -161,6 +161,11 @@ Catch2 tests cover binary and empty files, exact size limits, invalid metadata,
 authorization, disk cleanup after incomplete uploads and failed transactions,
 online notices, replay without ACK, mixed text/file replay, client streaming,
 local overwrite prevention, duplicate ACKs, and login-token handoff.
+Additional regression cases cover metadata limits, unavailable storage, stored-size
+mismatches, preservation after a post-commit failure, bounded client responses,
+and download cancellation followed by a successful retry. The real-process
+[integration walkthrough](testing.md#real-server-and-client-processes) checks
+console transfers and pending file recovery after both normal and forced shutdown.
 
 ```bash
 ./build/tests/chatroom_tests "[file]"
