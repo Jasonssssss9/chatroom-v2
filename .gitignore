@@ -3,3 +3,4 @@
 /config/server.json
 /.env
 /compile_commands.json
+__pycache__/

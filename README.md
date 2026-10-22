@@ -63,6 +63,8 @@ See [Connection Keepalive](docs/keepalive.md) for automatic heartbeats, idle cle
 and login expiration reminders.
 See [Integration Verification](docs/testing.md) for full workflows, restart recovery,
 file regression tests, sanitizers, and standalone client verification.
+See [Concurrency and Performance](docs/performance.md) for reproducible load tests,
+measurement definitions, and results from the local test environment.
 
 ## Building
 

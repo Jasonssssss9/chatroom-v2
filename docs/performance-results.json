@@ -1,0 +1,2744 @@
+{
+  "baseline": {
+    "started_utc": "2026-10-22T06:10:43Z",
+    "environment": {
+      "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+      "cpu": "AMD Ryzen AI 9 HX 370 w/ Radeon 890M",
+      "logical_cpus": 8,
+      "memory_kib": 12249312,
+      "open_file_limit": 1048576,
+      "python": "3.12.3",
+      "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+      "commit": "2ac4dca65b6d0bf2e6155a1f08ee052dee673154",
+      "mysql": {
+        "version": "8.0.46-0ubuntu0.24.04.4",
+        "innodb_flush_log_at_trx_commit": "1",
+        "sync_binlog": "1",
+        "innodb_buffer_pool_size": "134217728",
+        "log_bin": "1",
+        "max_connections": "151"
+      }
+    },
+    "server_sha256": "15c49fe58671e5d6826c263edbe7713ee225a97d8744dabaf610cc19587f6824",
+    "settings": {
+      "warmup_seconds": 3,
+      "duration_seconds": 20,
+      "idle_seconds": 45,
+      "heartbeat_seconds": 15,
+      "body_bytes": 128,
+      "group_members": 64,
+      "max_pending_requests": 1024,
+      "max_requests_per_connection": 32,
+      "ack_required": true,
+      "model": "closed loop"
+    },
+    "cases": [
+      {
+        "name": "idle-1000-w4-r1",
+        "kind": "idle",
+        "connections": 1000,
+        "workers": 4,
+        "requested_seconds": 45,
+        "repeat": 1,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.41796875,
+          "threads": 10
+        },
+        "setup_seconds": 0.398,
+        "server_connected": {
+          "cpu_seconds": 0.8,
+          "rss_mib": 16.16796875,
+          "threads": 10
+        },
+        "server_fd_count": 1012,
+        "seconds": 45.007,
+        "operations": 2999,
+        "operations_per_second": 66.63,
+        "deliveries": 0,
+        "deliveries_per_second": 0.0,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 0.459,
+            "p95_ms": 0.829,
+            "p99_ms": 0.988,
+            "max_ms": 2.042
+          },
+          "delivery": {},
+          "acknowledged": {}
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 1.78,
+            "rss_peak_mib": 16.17,
+            "rss_start_mib": 16.17,
+            "rss_end_mib": 16.17,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 2.44,
+            "rss_peak_mib": 34.75,
+            "rss_start_mib": 33.5,
+            "rss_end_mib": 34.75,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 0.6,
+            "rss_peak_mib": 458.28,
+            "rss_start_mib": 458.28,
+            "rss_end_mib": 458.28,
+            "threads_peak": 45
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 0,
+          "Com_stmt_execute": 0,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 11,
+          "Innodb_row_lock_waits": 0
+        },
+        "connections_verified_after_hold": 1000,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "idle-5000-w4-r1",
+        "kind": "idle",
+        "connections": 5000,
+        "workers": 4,
+        "requested_seconds": 45,
+        "repeat": 1,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.51171875,
+          "threads": 10
+        },
+        "setup_seconds": 1.566,
+        "server_connected": {
+          "cpu_seconds": 2.95,
+          "rss_mib": 21.88671875,
+          "threads": 10
+        },
+        "server_fd_count": 5012,
+        "seconds": 45.155,
+        "operations": 14956,
+        "operations_per_second": 331.21,
+        "deliveries": 0,
+        "deliveries_per_second": 0.0,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 0.314,
+            "p95_ms": 0.645,
+            "p99_ms": 0.824,
+            "max_ms": 25.339
+          },
+          "delivery": {},
+          "acknowledged": {}
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 6.8,
+            "rss_peak_mib": 21.89,
+            "rss_start_mib": 21.89,
+            "rss_end_mib": 21.89,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 8.57,
+            "rss_peak_mib": 71.75,
+            "rss_start_mib": 64.88,
+            "rss_end_mib": 71.75,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 0.44,
+            "rss_peak_mib": 458.4,
+            "rss_start_mib": 458.4,
+            "rss_end_mib": 458.4,
+            "threads_peak": 45
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 0,
+          "Com_stmt_execute": 0,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 0,
+          "Innodb_row_lock_waits": 0
+        },
+        "connections_verified_after_hold": 5000,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "idle-10000-w4-r1",
+        "kind": "idle",
+        "connections": 10000,
+        "workers": 4,
+        "requested_seconds": 45,
+        "repeat": 1,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.375,
+          "threads": 10
+        },
+        "setup_seconds": 3.567,
+        "server_connected": {
+          "cpu_seconds": 5.81,
+          "rss_mib": 28.75,
+          "threads": 10
+        },
+        "server_fd_count": 10012,
+        "seconds": 45.068,
+        "operations": 29661,
+        "operations_per_second": 658.13,
+        "deliveries": 0,
+        "deliveries_per_second": 0.0,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 0.246,
+            "p95_ms": 0.682,
+            "p99_ms": 6.201,
+            "max_ms": 26.859
+          },
+          "delivery": {},
+          "acknowledged": {}
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 10.38,
+            "rss_peak_mib": 28.75,
+            "rss_start_mib": 28.75,
+            "rss_end_mib": 28.75,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 13.47,
+            "rss_peak_mib": 117.61,
+            "rss_start_mib": 104.49,
+            "rss_end_mib": 116.29,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 0.38,
+            "rss_peak_mib": 458.53,
+            "rss_start_mib": 458.53,
+            "rss_end_mib": 458.53,
+            "threads_peak": 45
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 0,
+          "Com_stmt_execute": 0,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 3,
+          "Innodb_row_lock_waits": 0
+        },
+        "connections_verified_after_hold": 10000,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "ping-32-w4-r1",
+        "kind": "ping",
+        "connections": 32,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 1,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.51171875,
+          "threads": 10
+        },
+        "setup_seconds": 0.056,
+        "server_connected": {
+          "cpu_seconds": 0.32,
+          "rss_mib": 15.63671875,
+          "threads": 10
+        },
+        "server_fd_count": 44,
+        "seconds": 20.001,
+        "operations": 517580,
+        "operations_per_second": 25877.37,
+        "deliveries": 0,
+        "deliveries_per_second": 0.0,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 1.214,
+            "p95_ms": 1.482,
+            "p99_ms": 1.708,
+            "max_ms": 3.529
+          },
+          "delivery": {},
+          "acknowledged": {}
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 136.84,
+            "rss_peak_mib": 15.64,
+            "rss_start_mib": 15.64,
+            "rss_end_mib": 15.64,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 47.9,
+            "rss_peak_mib": 120.02,
+            "rss_start_mib": 116.15,
+            "rss_end_mib": 120.02,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 0.35,
+            "rss_peak_mib": 458.53,
+            "rss_start_mib": 458.53,
+            "rss_end_mib": 458.53,
+            "threads_peak": 45
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 0,
+          "Com_stmt_execute": 0,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 0,
+          "Innodb_row_lock_waits": 0
+        },
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "ping-256-w4-r1",
+        "kind": "ping",
+        "connections": 256,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 1,
+        "server_baseline": {
+          "cpu_seconds": 0.15,
+          "rss_mib": 12.38671875,
+          "threads": 10
+        },
+        "setup_seconds": 0.209,
+        "server_connected": {
+          "cpu_seconds": 0.46,
+          "rss_mib": 15.63671875,
+          "threads": 10
+        },
+        "server_fd_count": 268,
+        "seconds": 20.007,
+        "operations": 536393,
+        "operations_per_second": 26809.77,
+        "deliveries": 0,
+        "deliveries_per_second": 0.0,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 9.631,
+            "p95_ms": 10.81,
+            "p99_ms": 11.728,
+            "max_ms": 16.272
+          },
+          "delivery": {},
+          "acknowledged": {}
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 138.7,
+            "rss_peak_mib": 15.64,
+            "rss_start_mib": 15.64,
+            "rss_end_mib": 15.64,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 41.98,
+            "rss_peak_mib": 120.38,
+            "rss_start_mib": 116.38,
+            "rss_end_mib": 120.38,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 0.3,
+            "rss_peak_mib": 458.53,
+            "rss_start_mib": 458.53,
+            "rss_end_mib": 458.53,
+            "threads_peak": 45
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 0,
+          "Com_stmt_execute": 0,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 0,
+          "Innodb_row_lock_waits": 0
+        },
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "private-16-w4-r1",
+        "kind": "private",
+        "connections": 16,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 1,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.375,
+          "threads": 10
+        },
+        "setup_seconds": 0.045,
+        "server_connected": {
+          "cpu_seconds": 0.3,
+          "rss_mib": 15.5,
+          "threads": 10
+        },
+        "server_fd_count": 28,
+        "seconds": 20.05,
+        "operations": 6097,
+        "operations_per_second": 304.09,
+        "deliveries": 6097,
+        "deliveries_per_second": 304.09,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 12.774,
+            "p95_ms": 47.839,
+            "p99_ms": 51.587,
+            "max_ms": 60.082
+          },
+          "delivery": {
+            "p50_ms": 41.541,
+            "p95_ms": 48.949,
+            "p99_ms": 53.134,
+            "max_ms": 68.25
+          },
+          "acknowledged": {
+            "p50_ms": 49.533,
+            "p95_ms": 93.183,
+            "p99_ms": 100.002,
+            "max_ms": 116.102
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 35.06,
+            "rss_peak_mib": 15.5,
+            "rss_start_mib": 15.5,
+            "rss_end_mib": 15.5,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 12.02,
+            "rss_peak_mib": 126.5,
+            "rss_start_mib": 126.5,
+            "rss_end_mib": 126.5,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 74.61,
+            "rss_peak_mib": 460.4,
+            "rss_start_mib": 458.53,
+            "rss_end_mib": 460.4,
+            "threads_peak": 45
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 6097,
+          "Com_stmt_execute": 24388,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 14252,
+          "Innodb_row_lock_waits": 0
+        },
+        "persisted_messages": 7025,
+        "persisted_deliveries": 7025,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "private-64-w4-r1",
+        "kind": "private",
+        "connections": 64,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 1,
+        "server_baseline": {
+          "cpu_seconds": 0.18,
+          "rss_mib": 12.1875,
+          "threads": 10
+        },
+        "setup_seconds": 0.109,
+        "server_connected": {
+          "cpu_seconds": 0.38,
+          "rss_mib": 15.3125,
+          "threads": 10
+        },
+        "server_fd_count": 76,
+        "seconds": 20.122,
+        "operations": 6855,
+        "operations_per_second": 340.68,
+        "deliveries": 6855,
+        "deliveries_per_second": 340.68,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 86.64,
+            "p95_ms": 135.709,
+            "p99_ms": 159.819,
+            "max_ms": 219.846
+          },
+          "delivery": {
+            "p50_ms": 88.751,
+            "p95_ms": 140.907,
+            "p99_ms": 174.51,
+            "max_ms": 219.573
+          },
+          "acknowledged": {
+            "p50_ms": 174.689,
+            "p95_ms": 252.104,
+            "p99_ms": 302.826,
+            "max_ms": 383.505
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 37.77,
+            "rss_peak_mib": 15.31,
+            "rss_start_mib": 15.31,
+            "rss_end_mib": 15.31,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 14.26,
+            "rss_peak_mib": 128.38,
+            "rss_start_mib": 127.13,
+            "rss_end_mib": 128.38,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 78.72,
+            "rss_peak_mib": 467.28,
+            "rss_start_mib": 466.28,
+            "rss_end_mib": 467.28,
+            "threads_peak": 45
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 6855,
+          "Com_stmt_execute": 27420,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 13954,
+          "Innodb_row_lock_waits": 0
+        },
+        "persisted_messages": 7953,
+        "persisted_deliveries": 7953,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "private-256-w4-r1",
+        "kind": "private",
+        "connections": 256,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 1,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.375,
+          "threads": 10
+        },
+        "setup_seconds": 0.214,
+        "server_connected": {
+          "cpu_seconds": 0.46,
+          "rss_mib": 15.375,
+          "threads": 10
+        },
+        "server_fd_count": 268,
+        "seconds": 20.533,
+        "operations": 6400,
+        "operations_per_second": 311.7,
+        "deliveries": 6400,
+        "deliveries_per_second": 311.7,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 374.272,
+            "p95_ms": 714.818,
+            "p99_ms": 797.261,
+            "max_ms": 929.948
+          },
+          "delivery": {
+            "p50_ms": 381.032,
+            "p95_ms": 718.466,
+            "p99_ms": 801.528,
+            "max_ms": 929.759
+          },
+          "acknowledged": {
+            "p50_ms": 770.392,
+            "p95_ms": 1228.454,
+            "p99_ms": 1533.639,
+            "max_ms": 1649.606
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 34.24,
+            "rss_peak_mib": 15.38,
+            "rss_start_mib": 15.38,
+            "rss_end_mib": 15.38,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 14.81,
+            "rss_peak_mib": 130.75,
+            "rss_start_mib": 129.63,
+            "rss_end_mib": 127.93,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 69.74,
+            "rss_peak_mib": 469.03,
+            "rss_start_mib": 469.03,
+            "rss_end_mib": 469.03,
+            "threads_peak": 45
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 6400,
+          "Com_stmt_execute": 25600,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 12341,
+          "Innodb_row_lock_waits": 0
+        },
+        "persisted_messages": 7168,
+        "persisted_deliveries": 7168,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "private-256-w8-r1",
+        "kind": "private",
+        "connections": 256,
+        "workers": 8,
+        "requested_seconds": 20,
+        "repeat": 1,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.26171875,
+          "threads": 14
+        },
+        "setup_seconds": 0.255,
+        "server_connected": {
+          "cpu_seconds": 1.18,
+          "rss_mib": 18.63671875,
+          "threads": 14
+        },
+        "server_fd_count": 272,
+        "seconds": 20.426,
+        "operations": 10225,
+        "operations_per_second": 500.58,
+        "deliveries": 10225,
+        "deliveries_per_second": 500.58,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 220.424,
+            "p95_ms": 406.651,
+            "p99_ms": 518.364,
+            "max_ms": 828.903
+          },
+          "delivery": {
+            "p50_ms": 232.876,
+            "p95_ms": 414.865,
+            "p99_ms": 524.539,
+            "max_ms": 828.566
+          },
+          "acknowledged": {
+            "p50_ms": 445.254,
+            "p95_ms": 778.486,
+            "p99_ms": 1107.592,
+            "max_ms": 1234.531
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 42.15,
+            "rss_peak_mib": 18.76,
+            "rss_start_mib": 18.76,
+            "rss_end_mib": 18.76,
+            "threads_peak": 14
+          },
+          "generator": {
+            "cpu_percent": 16.06,
+            "rss_peak_mib": 128.05,
+            "rss_start_mib": 128.05,
+            "rss_end_mib": 128.05,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 98.21,
+            "rss_peak_mib": 471.78,
+            "rss_start_mib": 471.03,
+            "rss_end_mib": 471.78,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 10225,
+          "Com_stmt_execute": 40900,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 10866,
+          "Innodb_row_lock_waits": 0
+        },
+        "persisted_messages": 11755,
+        "persisted_deliveries": 11755,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "group-64-w4-r1",
+        "kind": "group",
+        "connections": 64,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 1,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.25390625,
+          "threads": 10
+        },
+        "setup_seconds": 0.099,
+        "server_connected": {
+          "cpu_seconds": 0.33,
+          "rss_mib": 15.25390625,
+          "threads": 10
+        },
+        "server_fd_count": 76,
+        "seconds": 20.098,
+        "operations": 170,
+        "operations_per_second": 8.46,
+        "deliveries": 10710,
+        "deliveries_per_second": 532.88,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 26.784,
+            "p95_ms": 41.008,
+            "p99_ms": 46.873,
+            "max_ms": 53.007
+          },
+          "delivery": {
+            "p50_ms": 27.985,
+            "p95_ms": 42.807,
+            "p99_ms": 47.539,
+            "max_ms": 53.738
+          },
+          "acknowledged": {
+            "p50_ms": 109.178,
+            "p95_ms": 161.65,
+            "p99_ms": 206.2,
+            "max_ms": 243.186
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 25.62,
+            "rss_peak_mib": 15.25,
+            "rss_start_mib": 15.25,
+            "rss_end_mib": 15.25,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 7.86,
+            "rss_peak_mib": 128.18,
+            "rss_start_mib": 128.18,
+            "rss_end_mib": 128.18,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 57.42,
+            "rss_peak_mib": 477.9,
+            "rss_start_mib": 477.28,
+            "rss_end_mib": 477.9,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 170,
+          "Com_stmt_execute": 21930,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 12503,
+          "Innodb_row_lock_waits": 0
+        },
+        "persisted_messages": 194,
+        "persisted_deliveries": 12222,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "group-256-w4-r1",
+        "kind": "group",
+        "connections": 256,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 1,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.0859375,
+          "threads": 10
+        },
+        "setup_seconds": 0.198,
+        "server_connected": {
+          "cpu_seconds": 0.45,
+          "rss_mib": 15.3359375,
+          "threads": 10
+        },
+        "server_fd_count": 268,
+        "seconds": 20.268,
+        "operations": 222,
+        "operations_per_second": 10.95,
+        "deliveries": 13986,
+        "deliveries_per_second": 690.06,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 131.388,
+            "p95_ms": 330.336,
+            "p99_ms": 389.702,
+            "max_ms": 480.16
+          },
+          "delivery": {
+            "p50_ms": 132.2,
+            "p95_ms": 331.437,
+            "p99_ms": 391.427,
+            "max_ms": 483.382
+          },
+          "acknowledged": {
+            "p50_ms": 334.735,
+            "p95_ms": 545.591,
+            "p99_ms": 626.681,
+            "max_ms": 671.677
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 35.08,
+            "rss_peak_mib": 15.34,
+            "rss_start_mib": 15.34,
+            "rss_end_mib": 15.34,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 10.56,
+            "rss_peak_mib": 121.95,
+            "rss_start_mib": 121.95,
+            "rss_end_mib": 121.95,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 76.92,
+            "rss_peak_mib": 478.9,
+            "rss_start_mib": 478.65,
+            "rss_end_mib": 478.9,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 222,
+          "Com_stmt_execute": 28638,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 13717,
+          "Innodb_row_lock_waits": 16
+        },
+        "persisted_messages": 257,
+        "persisted_deliveries": 16191,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "group-512-w4-r1",
+        "kind": "group",
+        "connections": 512,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 1,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.3828125,
+          "threads": 10
+        },
+        "setup_seconds": 0.305,
+        "server_connected": {
+          "cpu_seconds": 0.6,
+          "rss_mib": 15.7578125,
+          "threads": 10
+        },
+        "server_fd_count": 524,
+        "seconds": 20.6,
+        "operations": 229,
+        "operations_per_second": 11.12,
+        "deliveries": 14427,
+        "deliveries_per_second": 700.32,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 321.515,
+            "p95_ms": 633.245,
+            "p99_ms": 757.852,
+            "max_ms": 836.221
+          },
+          "delivery": {
+            "p50_ms": 321.084,
+            "p95_ms": 634.109,
+            "p99_ms": 759.268,
+            "max_ms": 839.959
+          },
+          "acknowledged": {
+            "p50_ms": 681.042,
+            "p95_ms": 992.381,
+            "p99_ms": 1158.121,
+            "max_ms": 1263.256
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 35.29,
+            "rss_peak_mib": 16.13,
+            "rss_start_mib": 16.13,
+            "rss_end_mib": 16.13,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 10.49,
+            "rss_peak_mib": 120.0,
+            "rss_start_mib": 120.98,
+            "rss_end_mib": 120.0,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 77.13,
+            "rss_peak_mib": 482.9,
+            "rss_start_mib": 482.78,
+            "rss_end_mib": 482.9,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 229,
+          "Com_stmt_execute": 29541,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 14072,
+          "Innodb_row_lock_waits": 56
+        },
+        "persisted_messages": 271,
+        "persisted_deliveries": 17073,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "ping-32-w4-r2",
+        "kind": "ping",
+        "connections": 32,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 2,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.390625,
+          "threads": 10
+        },
+        "setup_seconds": 0.056,
+        "server_connected": {
+          "cpu_seconds": 0.33,
+          "rss_mib": 15.640625,
+          "threads": 10
+        },
+        "server_fd_count": 44,
+        "seconds": 20.001,
+        "operations": 518177,
+        "operations_per_second": 25907.55,
+        "deliveries": 0,
+        "deliveries_per_second": 0.0,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 1.214,
+            "p95_ms": 1.467,
+            "p99_ms": 1.699,
+            "max_ms": 6.929
+          },
+          "delivery": {},
+          "acknowledged": {}
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 136.74,
+            "rss_peak_mib": 15.64,
+            "rss_start_mib": 15.64,
+            "rss_end_mib": 15.64,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 48.45,
+            "rss_peak_mib": 120.0,
+            "rss_start_mib": 120.0,
+            "rss_end_mib": 120.0,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 0.65,
+            "rss_peak_mib": 484.65,
+            "rss_start_mib": 484.65,
+            "rss_end_mib": 484.65,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 0,
+          "Com_stmt_execute": 0,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 16,
+          "Innodb_row_lock_waits": 0
+        },
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "ping-256-w4-r2",
+        "kind": "ping",
+        "connections": 256,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 2,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.38671875,
+          "threads": 10
+        },
+        "setup_seconds": 0.196,
+        "server_connected": {
+          "cpu_seconds": 0.52,
+          "rss_mib": 15.51171875,
+          "threads": 10
+        },
+        "server_fd_count": 268,
+        "seconds": 20.007,
+        "operations": 537611,
+        "operations_per_second": 26871.54,
+        "deliveries": 0,
+        "deliveries_per_second": 0.0,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 9.576,
+            "p95_ms": 10.687,
+            "p99_ms": 11.67,
+            "max_ms": 34.319
+          },
+          "delivery": {},
+          "acknowledged": {}
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 139.15,
+            "rss_peak_mib": 15.51,
+            "rss_start_mib": 15.51,
+            "rss_end_mib": 15.51,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 41.99,
+            "rss_peak_mib": 123.25,
+            "rss_start_mib": 123.25,
+            "rss_end_mib": 121.28,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 0.45,
+            "rss_peak_mib": 484.65,
+            "rss_start_mib": 484.65,
+            "rss_end_mib": 484.65,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 0,
+          "Com_stmt_execute": 0,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 5,
+          "Innodb_row_lock_waits": 0
+        },
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "private-16-w4-r2",
+        "kind": "private",
+        "connections": 16,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 2,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.28515625,
+          "threads": 10
+        },
+        "setup_seconds": 0.046,
+        "server_connected": {
+          "cpu_seconds": 0.3,
+          "rss_mib": 15.41015625,
+          "threads": 10
+        },
+        "server_fd_count": 28,
+        "seconds": 20.054,
+        "operations": 6276,
+        "operations_per_second": 312.95,
+        "deliveries": 6276,
+        "deliveries_per_second": 312.95,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 10.231,
+            "p95_ms": 47.734,
+            "p99_ms": 49.388,
+            "max_ms": 64.01
+          },
+          "delivery": {
+            "p50_ms": 41.778,
+            "p95_ms": 48.02,
+            "p99_ms": 51.908,
+            "max_ms": 65.147
+          },
+          "acknowledged": {
+            "p50_ms": 48.406,
+            "p95_ms": 61.33,
+            "p99_ms": 98.34,
+            "max_ms": 111.87
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 35.85,
+            "rss_peak_mib": 15.41,
+            "rss_start_mib": 15.41,
+            "rss_end_mib": 15.41,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 11.92,
+            "rss_peak_mib": 120.63,
+            "rss_start_mib": 120.63,
+            "rss_end_mib": 120.63,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 74.7,
+            "rss_peak_mib": 484.65,
+            "rss_start_mib": 484.65,
+            "rss_end_mib": 484.65,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 6276,
+          "Com_stmt_execute": 25104,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 15863,
+          "Innodb_row_lock_waits": 0
+        },
+        "persisted_messages": 7214,
+        "persisted_deliveries": 7214,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "private-64-w4-r2",
+        "kind": "private",
+        "connections": 64,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 2,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.38671875,
+          "threads": 10
+        },
+        "setup_seconds": 0.096,
+        "server_connected": {
+          "cpu_seconds": 0.35,
+          "rss_mib": 15.38671875,
+          "threads": 10
+        },
+        "server_fd_count": 76,
+        "seconds": 20.117,
+        "operations": 7746,
+        "operations_per_second": 385.04,
+        "deliveries": 7746,
+        "deliveries_per_second": 385.04,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 78.31,
+            "p95_ms": 119.346,
+            "p99_ms": 129.06,
+            "max_ms": 143.638
+          },
+          "delivery": {
+            "p50_ms": 79.792,
+            "p95_ms": 125.405,
+            "p99_ms": 136.314,
+            "max_ms": 171.537
+          },
+          "acknowledged": {
+            "p50_ms": 157.909,
+            "p95_ms": 203.191,
+            "p99_ms": 218.428,
+            "max_ms": 245.95
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 42.2,
+            "rss_peak_mib": 15.39,
+            "rss_start_mib": 15.39,
+            "rss_end_mib": 15.39,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 15.91,
+            "rss_peak_mib": 120.63,
+            "rss_start_mib": 120.63,
+            "rss_end_mib": 120.63,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 87.09,
+            "rss_peak_mib": 484.78,
+            "rss_start_mib": 484.78,
+            "rss_end_mib": 484.78,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 7746,
+          "Com_stmt_execute": 30984,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 16987,
+          "Innodb_row_lock_waits": 0
+        },
+        "persisted_messages": 8944,
+        "persisted_deliveries": 8944,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "private-256-w4-r2",
+        "kind": "private",
+        "connections": 256,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 2,
+        "server_baseline": {
+          "cpu_seconds": 0.15,
+          "rss_mib": 12.375,
+          "threads": 10
+        },
+        "setup_seconds": 0.176,
+        "server_connected": {
+          "cpu_seconds": 0.45,
+          "rss_mib": 15.625,
+          "threads": 10
+        },
+        "server_fd_count": 268,
+        "seconds": 20.552,
+        "operations": 7087,
+        "operations_per_second": 344.84,
+        "deliveries": 7087,
+        "deliveries_per_second": 344.84,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 349.09,
+            "p95_ms": 483.649,
+            "p99_ms": 566.212,
+            "max_ms": 644.883
+          },
+          "delivery": {
+            "p50_ms": 356.107,
+            "p95_ms": 495.582,
+            "p99_ms": 572.841,
+            "max_ms": 658.689
+          },
+          "acknowledged": {
+            "p50_ms": 714.303,
+            "p95_ms": 944.407,
+            "p99_ms": 1018.549,
+            "max_ms": 1132.959
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 38.0,
+            "rss_peak_mib": 15.62,
+            "rss_start_mib": 15.62,
+            "rss_end_mib": 15.62,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 14.94,
+            "rss_peak_mib": 120.63,
+            "rss_start_mib": 120.63,
+            "rss_end_mib": 118.72,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 77.07,
+            "rss_peak_mib": 491.03,
+            "rss_start_mib": 491.03,
+            "rss_end_mib": 491.03,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 7087,
+          "Com_stmt_execute": 28348,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 15183,
+          "Innodb_row_lock_waits": 0
+        },
+        "persisted_messages": 8367,
+        "persisted_deliveries": 8367,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "private-256-w8-r2",
+        "kind": "private",
+        "connections": 256,
+        "workers": 8,
+        "requested_seconds": 20,
+        "repeat": 2,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.51171875,
+          "threads": 14
+        },
+        "setup_seconds": 0.303,
+        "server_connected": {
+          "cpu_seconds": 1.04,
+          "rss_mib": 19.01171875,
+          "threads": 14
+        },
+        "server_fd_count": 272,
+        "seconds": 20.334,
+        "operations": 12247,
+        "operations_per_second": 602.28,
+        "deliveries": 12247,
+        "deliveries_per_second": 602.28,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 195.918,
+            "p95_ms": 330.574,
+            "p99_ms": 382.273,
+            "max_ms": 451.103
+          },
+          "delivery": {
+            "p50_ms": 209.08,
+            "p95_ms": 336.583,
+            "p99_ms": 391.49,
+            "max_ms": 466.409
+          },
+          "acknowledged": {
+            "p50_ms": 400.079,
+            "p95_ms": 558.303,
+            "p99_ms": 656.051,
+            "max_ms": 731.22
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 52.92,
+            "rss_peak_mib": 19.01,
+            "rss_start_mib": 19.01,
+            "rss_end_mib": 19.01,
+            "threads_peak": 14
+          },
+          "generator": {
+            "cpu_percent": 19.67,
+            "rss_peak_mib": 117.73,
+            "rss_start_mib": 117.73,
+            "rss_end_mib": 117.73,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 119.65,
+            "rss_peak_mib": 491.15,
+            "rss_start_mib": 491.15,
+            "rss_end_mib": 491.15,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 12247,
+          "Com_stmt_execute": 48988,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 14538,
+          "Innodb_row_lock_waits": 0
+        },
+        "persisted_messages": 14295,
+        "persisted_deliveries": 14295,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "group-64-w4-r2",
+        "kind": "group",
+        "connections": 64,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 2,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.375,
+          "threads": 10
+        },
+        "setup_seconds": 0.088,
+        "server_connected": {
+          "cpu_seconds": 0.35,
+          "rss_mib": 15.5,
+          "threads": 10
+        },
+        "server_fd_count": 76,
+        "seconds": 20.006,
+        "operations": 179,
+        "operations_per_second": 8.95,
+        "deliveries": 11277,
+        "deliveries_per_second": 563.67,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 26.499,
+            "p95_ms": 41.068,
+            "p99_ms": 46.045,
+            "max_ms": 54.118
+          },
+          "delivery": {
+            "p50_ms": 27.661,
+            "p95_ms": 42.61,
+            "p99_ms": 47.09,
+            "max_ms": 55.547
+          },
+          "acknowledged": {
+            "p50_ms": 102.788,
+            "p95_ms": 155.458,
+            "p99_ms": 185.781,
+            "max_ms": 211.479
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 27.14,
+            "rss_peak_mib": 15.5,
+            "rss_start_mib": 15.5,
+            "rss_end_mib": 15.5,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 8.35,
+            "rss_peak_mib": 117.73,
+            "rss_start_mib": 117.73,
+            "rss_end_mib": 116.79,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 60.73,
+            "rss_peak_mib": 492.4,
+            "rss_start_mib": 492.4,
+            "rss_end_mib": 492.4,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 179,
+          "Com_stmt_execute": 23091,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 13315,
+          "Innodb_row_lock_waits": 0
+        },
+        "persisted_messages": 207,
+        "persisted_deliveries": 13041,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "group-256-w4-r2",
+        "kind": "group",
+        "connections": 256,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 2,
+        "server_baseline": {
+          "cpu_seconds": 0.15,
+          "rss_mib": 12.38671875,
+          "threads": 10
+        },
+        "setup_seconds": 0.187,
+        "server_connected": {
+          "cpu_seconds": 0.43,
+          "rss_mib": 15.51171875,
+          "threads": 10
+        },
+        "server_fd_count": 268,
+        "seconds": 20.339,
+        "operations": 216,
+        "operations_per_second": 10.62,
+        "deliveries": 13608,
+        "deliveries_per_second": 669.06,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 140.828,
+            "p95_ms": 324.176,
+            "p99_ms": 377.464,
+            "max_ms": 407.104
+          },
+          "delivery": {
+            "p50_ms": 142.952,
+            "p95_ms": 323.319,
+            "p99_ms": 378.88,
+            "max_ms": 409.46
+          },
+          "acknowledged": {
+            "p50_ms": 348.848,
+            "p95_ms": 522.915,
+            "p99_ms": 625.361,
+            "max_ms": 664.322
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 34.37,
+            "rss_peak_mib": 15.64,
+            "rss_start_mib": 15.64,
+            "rss_end_mib": 15.64,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 10.47,
+            "rss_peak_mib": 116.79,
+            "rss_start_mib": 116.79,
+            "rss_end_mib": 115.8,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 75.86,
+            "rss_peak_mib": 492.4,
+            "rss_start_mib": 492.4,
+            "rss_end_mib": 492.4,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 216,
+          "Com_stmt_execute": 27864,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 13096,
+          "Innodb_row_lock_waits": 11
+        },
+        "persisted_messages": 251,
+        "persisted_deliveries": 15813,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "group-512-w4-r2",
+        "kind": "group",
+        "connections": 512,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 2,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.2421875,
+          "threads": 10
+        },
+        "setup_seconds": 0.272,
+        "server_connected": {
+          "cpu_seconds": 0.6,
+          "rss_mib": 15.4921875,
+          "threads": 10
+        },
+        "server_fd_count": 524,
+        "seconds": 20.68,
+        "operations": 225,
+        "operations_per_second": 10.88,
+        "deliveries": 14175,
+        "deliveries_per_second": 685.44,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 322.832,
+            "p95_ms": 643.783,
+            "p99_ms": 719.157,
+            "max_ms": 792.306
+          },
+          "delivery": {
+            "p50_ms": 322.706,
+            "p95_ms": 645.404,
+            "p99_ms": 721.339,
+            "max_ms": 794.824
+          },
+          "acknowledged": {
+            "p50_ms": 706.227,
+            "p95_ms": 933.016,
+            "p99_ms": 956.57,
+            "max_ms": 1024.674
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 34.67,
+            "rss_peak_mib": 15.87,
+            "rss_start_mib": 15.87,
+            "rss_end_mib": 15.87,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 10.54,
+            "rss_peak_mib": 115.8,
+            "rss_start_mib": 115.8,
+            "rss_end_mib": 115.8,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 77.66,
+            "rss_peak_mib": 492.53,
+            "rss_start_mib": 492.53,
+            "rss_end_mib": 492.53,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 225,
+          "Com_stmt_execute": 29025,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 13886,
+          "Innodb_row_lock_waits": 51
+        },
+        "persisted_messages": 267,
+        "persisted_deliveries": 16821,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "ping-32-w4-r3",
+        "kind": "ping",
+        "connections": 32,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 3,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.55078125,
+          "threads": 10
+        },
+        "setup_seconds": 0.051,
+        "server_connected": {
+          "cpu_seconds": 0.33,
+          "rss_mib": 15.55078125,
+          "threads": 10
+        },
+        "server_fd_count": 44,
+        "seconds": 20.002,
+        "operations": 480859,
+        "operations_per_second": 24040.71,
+        "deliveries": 0,
+        "deliveries_per_second": 0.0,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 1.268,
+            "p95_ms": 1.833,
+            "p99_ms": 2.343,
+            "max_ms": 8.105
+          },
+          "delivery": {},
+          "acknowledged": {}
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 137.29,
+            "rss_peak_mib": 15.55,
+            "rss_start_mib": 15.55,
+            "rss_end_mib": 15.55,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 48.7,
+            "rss_peak_mib": 115.8,
+            "rss_start_mib": 115.8,
+            "rss_end_mib": 115.8,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 0.85,
+            "rss_peak_mib": 492.53,
+            "rss_start_mib": 492.53,
+            "rss_end_mib": 492.53,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 0,
+          "Com_stmt_execute": 0,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 18,
+          "Innodb_row_lock_waits": 0
+        },
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "ping-256-w4-r3",
+        "kind": "ping",
+        "connections": 256,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 3,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.38671875,
+          "threads": 10
+        },
+        "setup_seconds": 0.234,
+        "server_connected": {
+          "cpu_seconds": 0.46,
+          "rss_mib": 15.51171875,
+          "threads": 10
+        },
+        "server_fd_count": 268,
+        "seconds": 20.008,
+        "operations": 501536,
+        "operations_per_second": 25067.08,
+        "deliveries": 0,
+        "deliveries_per_second": 0.0,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 9.936,
+            "p95_ms": 13.122,
+            "p99_ms": 15.908,
+            "max_ms": 25.892
+          },
+          "delivery": {},
+          "acknowledged": {}
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 139.9,
+            "rss_peak_mib": 15.76,
+            "rss_start_mib": 15.51,
+            "rss_end_mib": 15.76,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 44.08,
+            "rss_peak_mib": 115.8,
+            "rss_start_mib": 115.8,
+            "rss_end_mib": 115.8,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 0.55,
+            "rss_peak_mib": 492.53,
+            "rss_start_mib": 492.53,
+            "rss_end_mib": 492.53,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 0,
+          "Com_stmt_execute": 0,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 6,
+          "Innodb_row_lock_waits": 0
+        },
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "private-16-w4-r3",
+        "kind": "private",
+        "connections": 16,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 3,
+        "server_baseline": {
+          "cpu_seconds": 0.15,
+          "rss_mib": 12.3125,
+          "threads": 10
+        },
+        "setup_seconds": 0.047,
+        "server_connected": {
+          "cpu_seconds": 0.32,
+          "rss_mib": 15.6875,
+          "threads": 10
+        },
+        "server_fd_count": 28,
+        "seconds": 20.047,
+        "operations": 6224,
+        "operations_per_second": 310.48,
+        "deliveries": 6224,
+        "deliveries_per_second": 310.48,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 10.701,
+            "p95_ms": 47.758,
+            "p99_ms": 50.996,
+            "max_ms": 55.678
+          },
+          "delivery": {
+            "p50_ms": 41.812,
+            "p95_ms": 48.11,
+            "p99_ms": 51.942,
+            "max_ms": 61.013
+          },
+          "acknowledged": {
+            "p50_ms": 48.712,
+            "p95_ms": 63.669,
+            "p99_ms": 97.792,
+            "max_ms": 110.099
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 36.71,
+            "rss_peak_mib": 15.69,
+            "rss_start_mib": 15.69,
+            "rss_end_mib": 15.69,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 12.37,
+            "rss_peak_mib": 115.8,
+            "rss_start_mib": 115.8,
+            "rss_end_mib": 115.8,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 77.12,
+            "rss_peak_mib": 492.53,
+            "rss_start_mib": 492.53,
+            "rss_end_mib": 492.53,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 6224,
+          "Com_stmt_execute": 24896,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 15724,
+          "Innodb_row_lock_waits": 0
+        },
+        "persisted_messages": 7159,
+        "persisted_deliveries": 7159,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "private-64-w4-r3",
+        "kind": "private",
+        "connections": 64,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 3,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.1484375,
+          "threads": 10
+        },
+        "setup_seconds": 0.1,
+        "server_connected": {
+          "cpu_seconds": 0.35,
+          "rss_mib": 15.3984375,
+          "threads": 10
+        },
+        "server_fd_count": 76,
+        "seconds": 20.132,
+        "operations": 7339,
+        "operations_per_second": 364.54,
+        "deliveries": 7339,
+        "deliveries_per_second": 364.54,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 82.173,
+            "p95_ms": 124.155,
+            "p99_ms": 139.739,
+            "max_ms": 172.55
+          },
+          "delivery": {
+            "p50_ms": 84.136,
+            "p95_ms": 132.027,
+            "p99_ms": 153.948,
+            "max_ms": 191.826
+          },
+          "acknowledged": {
+            "p50_ms": 166.728,
+            "p95_ms": 217.75,
+            "p99_ms": 240.676,
+            "max_ms": 283.256
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 42.52,
+            "rss_peak_mib": 15.4,
+            "rss_start_mib": 15.4,
+            "rss_end_mib": 15.4,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 16.39,
+            "rss_peak_mib": 115.8,
+            "rss_start_mib": 115.8,
+            "rss_end_mib": 115.8,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 90.85,
+            "rss_peak_mib": 497.4,
+            "rss_start_mib": 497.4,
+            "rss_end_mib": 497.4,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 7339,
+          "Com_stmt_execute": 29356,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 16384,
+          "Innodb_row_lock_waits": 0
+        },
+        "persisted_messages": 8520,
+        "persisted_deliveries": 8520,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "private-256-w4-r3",
+        "kind": "private",
+        "connections": 256,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 3,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.2421875,
+          "threads": 10
+        },
+        "setup_seconds": 0.216,
+        "server_connected": {
+          "cpu_seconds": 0.46,
+          "rss_mib": 15.3671875,
+          "threads": 10
+        },
+        "server_fd_count": 268,
+        "seconds": 20.59,
+        "operations": 6912,
+        "operations_per_second": 335.69,
+        "deliveries": 6912,
+        "deliveries_per_second": 335.69,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 352.697,
+            "p95_ms": 541.543,
+            "p99_ms": 591.616,
+            "max_ms": 636.748
+          },
+          "delivery": {
+            "p50_ms": 359.901,
+            "p95_ms": 546.194,
+            "p99_ms": 600.209,
+            "max_ms": 655.828
+          },
+          "acknowledged": {
+            "p50_ms": 730.294,
+            "p95_ms": 979.027,
+            "p99_ms": 1028.643,
+            "max_ms": 1110.032
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 38.17,
+            "rss_peak_mib": 15.37,
+            "rss_start_mib": 15.37,
+            "rss_end_mib": 15.37,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 15.35,
+            "rss_peak_mib": 115.8,
+            "rss_start_mib": 115.8,
+            "rss_end_mib": 115.8,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 78.77,
+            "rss_peak_mib": 497.4,
+            "rss_start_mib": 497.4,
+            "rss_end_mib": 497.4,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 6912,
+          "Com_stmt_execute": 27648,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 14797,
+          "Innodb_row_lock_waits": 0
+        },
+        "persisted_messages": 8192,
+        "persisted_deliveries": 8192,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "private-256-w8-r3",
+        "kind": "private",
+        "connections": 256,
+        "workers": 8,
+        "requested_seconds": 20,
+        "repeat": 3,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.390625,
+          "threads": 14
+        },
+        "setup_seconds": 0.234,
+        "server_connected": {
+          "cpu_seconds": 1.03,
+          "rss_mib": 19.140625,
+          "threads": 14
+        },
+        "server_fd_count": 272,
+        "seconds": 20.453,
+        "operations": 12199,
+        "operations_per_second": 596.44,
+        "deliveries": 12199,
+        "deliveries_per_second": 596.44,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 198.866,
+            "p95_ms": 301.479,
+            "p99_ms": 357.72,
+            "max_ms": 455.502
+          },
+          "delivery": {
+            "p50_ms": 209.448,
+            "p95_ms": 316.187,
+            "p99_ms": 365.621,
+            "max_ms": 455.479
+          },
+          "acknowledged": {
+            "p50_ms": 406.791,
+            "p95_ms": 556.531,
+            "p99_ms": 638.601,
+            "max_ms": 717.204
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 54.22,
+            "rss_peak_mib": 19.14,
+            "rss_start_mib": 19.14,
+            "rss_end_mib": 19.14,
+            "threads_peak": 14
+          },
+          "generator": {
+            "cpu_percent": 20.34,
+            "rss_peak_mib": 115.8,
+            "rss_start_mib": 115.8,
+            "rss_end_mib": 115.8,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 124.24,
+            "rss_peak_mib": 497.4,
+            "rss_start_mib": 497.4,
+            "rss_end_mib": 497.4,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 12199,
+          "Com_stmt_execute": 48796,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 14735,
+          "Innodb_row_lock_waits": 0
+        },
+        "persisted_messages": 13881,
+        "persisted_deliveries": 13881,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "group-64-w4-r3",
+        "kind": "group",
+        "connections": 64,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 3,
+        "server_baseline": {
+          "cpu_seconds": 0.15,
+          "rss_mib": 12.25390625,
+          "threads": 10
+        },
+        "setup_seconds": 0.081,
+        "server_connected": {
+          "cpu_seconds": 0.33,
+          "rss_mib": 15.37890625,
+          "threads": 10
+        },
+        "server_fd_count": 76,
+        "seconds": 20.093,
+        "operations": 172,
+        "operations_per_second": 8.56,
+        "deliveries": 10836,
+        "deliveries_per_second": 539.3,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 27.024,
+            "p95_ms": 40.958,
+            "p99_ms": 51.333,
+            "max_ms": 54.501
+          },
+          "delivery": {
+            "p50_ms": 28.318,
+            "p95_ms": 43.283,
+            "p99_ms": 52.243,
+            "max_ms": 56.24
+          },
+          "acknowledged": {
+            "p50_ms": 106.077,
+            "p95_ms": 161.514,
+            "p99_ms": 189.639,
+            "max_ms": 242.171
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 26.63,
+            "rss_peak_mib": 15.38,
+            "rss_start_mib": 15.38,
+            "rss_end_mib": 15.38,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 8.46,
+            "rss_peak_mib": 115.8,
+            "rss_start_mib": 115.8,
+            "rss_end_mib": 115.8,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 61.02,
+            "rss_peak_mib": 497.4,
+            "rss_start_mib": 497.4,
+            "rss_end_mib": 497.4,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 172,
+          "Com_stmt_execute": 22188,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 13084,
+          "Innodb_row_lock_waits": 0
+        },
+        "persisted_messages": 195,
+        "persisted_deliveries": 12285,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "group-256-w4-r3",
+        "kind": "group",
+        "connections": 256,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 3,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.25,
+          "threads": 10
+        },
+        "setup_seconds": 0.179,
+        "server_connected": {
+          "cpu_seconds": 0.46,
+          "rss_mib": 15.375,
+          "threads": 10
+        },
+        "server_fd_count": 268,
+        "seconds": 20.394,
+        "operations": 218,
+        "operations_per_second": 10.69,
+        "deliveries": 13734,
+        "deliveries_per_second": 673.43,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 131.356,
+            "p95_ms": 324.335,
+            "p99_ms": 370.771,
+            "max_ms": 431.154
+          },
+          "delivery": {
+            "p50_ms": 133.07,
+            "p95_ms": 324.822,
+            "p99_ms": 372.365,
+            "max_ms": 432.976
+          },
+          "acknowledged": {
+            "p50_ms": 345.615,
+            "p95_ms": 548.53,
+            "p99_ms": 613.657,
+            "max_ms": 734.114
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 34.62,
+            "rss_peak_mib": 15.5,
+            "rss_start_mib": 15.5,
+            "rss_end_mib": 15.5,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 10.49,
+            "rss_peak_mib": 115.8,
+            "rss_start_mib": 115.8,
+            "rss_end_mib": 115.8,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 76.39,
+            "rss_peak_mib": 499.03,
+            "rss_start_mib": 499.03,
+            "rss_end_mib": 499.03,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 218,
+          "Com_stmt_execute": 28122,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 13399,
+          "Innodb_row_lock_waits": 21
+        },
+        "persisted_messages": 256,
+        "persisted_deliveries": 16128,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "group-512-w4-r3",
+        "kind": "group",
+        "connections": 512,
+        "workers": 4,
+        "requested_seconds": 20,
+        "repeat": 3,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.38671875,
+          "threads": 10
+        },
+        "setup_seconds": 0.3,
+        "server_connected": {
+          "cpu_seconds": 0.62,
+          "rss_mib": 15.63671875,
+          "threads": 10
+        },
+        "server_fd_count": 524,
+        "seconds": 20.652,
+        "operations": 220,
+        "operations_per_second": 10.65,
+        "deliveries": 13860,
+        "deliveries_per_second": 671.11,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 327.005,
+            "p95_ms": 655.511,
+            "p99_ms": 751.938,
+            "max_ms": 831.301
+          },
+          "delivery": {
+            "p50_ms": 327.645,
+            "p95_ms": 657.079,
+            "p99_ms": 754.809,
+            "max_ms": 830.836
+          },
+          "acknowledged": {
+            "p50_ms": 734.522,
+            "p95_ms": 952.117,
+            "p99_ms": 1028.51,
+            "max_ms": 1060.657
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 34.81,
+            "rss_peak_mib": 16.01,
+            "rss_start_mib": 16.01,
+            "rss_end_mib": 16.01,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 10.6,
+            "rss_peak_mib": 115.8,
+            "rss_start_mib": 115.8,
+            "rss_end_mib": 115.8,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 78.88,
+            "rss_peak_mib": 501.53,
+            "rss_start_mib": 501.53,
+            "rss_end_mib": 501.53,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 220,
+          "Com_stmt_execute": 28380,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 13679,
+          "Innodb_row_lock_waits": 55
+        },
+        "persisted_messages": 262,
+        "persisted_deliveries": 16506,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "soak-64-w4-r1",
+        "kind": "soak",
+        "connections": 64,
+        "workers": 4,
+        "requested_seconds": 120,
+        "repeat": 1,
+        "server_baseline": {
+          "cpu_seconds": 0.17,
+          "rss_mib": 12.38671875,
+          "threads": 10
+        },
+        "setup_seconds": 0.087,
+        "server_connected": {
+          "cpu_seconds": 0.37,
+          "rss_mib": 15.38671875,
+          "threads": 10
+        },
+        "server_fd_count": 76,
+        "seconds": 120.127,
+        "operations": 38809,
+        "operations_per_second": 323.07,
+        "deliveries": 38809,
+        "deliveries_per_second": 323.07,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 88.072,
+            "p95_ms": 155.767,
+            "p99_ms": 193.837,
+            "max_ms": 340.732
+          },
+          "delivery": {
+            "p50_ms": 95.668,
+            "p95_ms": 165.366,
+            "p99_ms": 201.586,
+            "max_ms": 340.676
+          },
+          "acknowledged": {
+            "p50_ms": 187.672,
+            "p95_ms": 290.845,
+            "p99_ms": 343.967,
+            "max_ms": 542.528
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 37.69,
+            "rss_peak_mib": 15.39,
+            "rss_start_mib": 15.39,
+            "rss_end_mib": 15.39,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 14.65,
+            "rss_peak_mib": 115.8,
+            "rss_start_mib": 115.8,
+            "rss_end_mib": 115.8,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 80.61,
+            "rss_peak_mib": 506.65,
+            "rss_start_mib": 501.53,
+            "rss_end_mib": 506.65,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 38809,
+          "Com_stmt_execute": 155236,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 85114,
+          "Innodb_row_lock_waits": 0
+        },
+        "persisted_messages": 39799,
+        "persisted_deliveries": 39799,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      }
+    ]
+  },
+  "extended_idle": {
+    "started_utc": "2026-10-22T06:26:46Z",
+    "environment": {
+      "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+      "cpu": "AMD Ryzen AI 9 HX 370 w/ Radeon 890M",
+      "logical_cpus": 8,
+      "memory_kib": 12249312,
+      "open_file_limit": 1048576,
+      "python": "3.12.3",
+      "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+      "commit": "2ac4dca65b6d0bf2e6155a1f08ee052dee673154",
+      "mysql": {
+        "version": "8.0.46-0ubuntu0.24.04.4",
+        "innodb_flush_log_at_trx_commit": "1",
+        "sync_binlog": "1",
+        "innodb_buffer_pool_size": "134217728",
+        "log_bin": "1",
+        "max_connections": "151"
+      }
+    },
+    "server_sha256": "15c49fe58671e5d6826c263edbe7713ee225a97d8744dabaf610cc19587f6824",
+    "settings": {
+      "warmup_seconds": 3,
+      "duration_seconds": 20,
+      "idle_seconds": 45,
+      "heartbeat_seconds": 15,
+      "body_bytes": 128,
+      "group_members": 64,
+      "max_pending_requests": 1024,
+      "max_requests_per_connection": 32,
+      "ack_required": true,
+      "model": "closed loop"
+    },
+    "cases": [
+      {
+        "name": "idle-10000-w4-r1",
+        "kind": "idle",
+        "connections": 10000,
+        "workers": 4,
+        "requested_seconds": 120.0,
+        "repeat": 1,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.38671875,
+          "threads": 10
+        },
+        "setup_seconds": 3.357,
+        "server_connected": {
+          "cpu_seconds": 5.79,
+          "rss_mib": 29.01171875,
+          "threads": 10
+        },
+        "server_fd_count": 10012,
+        "seconds": 120.069,
+        "operations": 79813,
+        "operations_per_second": 664.72,
+        "deliveries": 0,
+        "deliveries_per_second": 0.0,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 0.265,
+            "p95_ms": 0.758,
+            "p99_ms": 3.317,
+            "max_ms": 256.317
+          },
+          "delivery": {},
+          "acknowledged": {}
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 10.33,
+            "rss_peak_mib": 29.01,
+            "rss_start_mib": 29.01,
+            "rss_end_mib": 29.01,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 12.46,
+            "rss_peak_mib": 121.75,
+            "rss_start_mib": 104.5,
+            "rss_end_mib": 118.84,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 0.41,
+            "rss_peak_mib": 550.15,
+            "rss_start_mib": 550.15,
+            "rss_end_mib": 550.15,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 0,
+          "Com_stmt_execute": 0,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 9,
+          "Innodb_row_lock_waits": 0
+        },
+        "connections_verified_after_hold": 10000,
+        "errors": [],
+        "server_warnings_errors": {}
+      }
+    ]
+  },
+  "lock_profile": {
+    "started_utc": "2026-10-22T06:29:22Z",
+    "environment": {
+      "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+      "cpu": "AMD Ryzen AI 9 HX 370 w/ Radeon 890M",
+      "logical_cpus": 8,
+      "memory_kib": 12249312,
+      "open_file_limit": 1048576,
+      "python": "3.12.3",
+      "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+      "commit": "2ac4dca65b6d0bf2e6155a1f08ee052dee673154",
+      "mysql": {
+        "version": "8.0.46-0ubuntu0.24.04.4",
+        "innodb_flush_log_at_trx_commit": "1",
+        "sync_binlog": "1",
+        "innodb_buffer_pool_size": "134217728",
+        "log_bin": "1",
+        "max_connections": "151"
+      }
+    },
+    "server_sha256": "15c49fe58671e5d6826c263edbe7713ee225a97d8744dabaf610cc19587f6824",
+    "settings": {
+      "warmup_seconds": 3,
+      "duration_seconds": 20,
+      "idle_seconds": 45,
+      "heartbeat_seconds": 15,
+      "body_bytes": 128,
+      "group_members": 64,
+      "max_pending_requests": 1024,
+      "max_requests_per_connection": 32,
+      "ack_required": true,
+      "model": "closed loop"
+    },
+    "cases": [
+      {
+        "name": "group-256-w4-r1",
+        "kind": "group",
+        "connections": 256,
+        "workers": 4,
+        "requested_seconds": 20.0,
+        "repeat": 1,
+        "server_baseline": {
+          "cpu_seconds": 0.15,
+          "rss_mib": 12.35546875,
+          "threads": 10
+        },
+        "setup_seconds": 0.189,
+        "server_connected": {
+          "cpu_seconds": 0.45,
+          "rss_mib": 15.35546875,
+          "threads": 10
+        },
+        "server_fd_count": 268,
+        "seconds": 20.292,
+        "operations": 246,
+        "operations_per_second": 12.12,
+        "deliveries": 15498,
+        "deliveries_per_second": 763.74,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 107.779,
+            "p95_ms": 261.67,
+            "p99_ms": 282.756,
+            "max_ms": 289.907
+          },
+          "delivery": {
+            "p50_ms": 108.427,
+            "p95_ms": 263.495,
+            "p99_ms": 283.903,
+            "max_ms": 292.462
+          },
+          "acknowledged": {
+            "p50_ms": 323.57,
+            "p95_ms": 448.669,
+            "p99_ms": 517.206,
+            "max_ms": 584.445
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 38.83,
+            "rss_peak_mib": 15.36,
+            "rss_start_mib": 15.36,
+            "rss_end_mib": 15.36,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 11.58,
+            "rss_peak_mib": 29.71,
+            "rss_start_mib": 28.46,
+            "rss_end_mib": 29.71,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 85.5,
+            "rss_peak_mib": 550.15,
+            "rss_start_mib": 550.15,
+            "rss_end_mib": 550.15,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 246,
+          "Com_stmt_execute": 31734,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 15475,
+          "Innodb_row_lock_time": 98,
+          "Innodb_row_lock_waits": 20
+        },
+        "persisted_messages": 284,
+        "persisted_deliveries": 17892,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      },
+      {
+        "name": "group-512-w4-r1",
+        "kind": "group",
+        "connections": 512,
+        "workers": 4,
+        "requested_seconds": 20.0,
+        "repeat": 1,
+        "server_baseline": {
+          "cpu_seconds": 0.16,
+          "rss_mib": 12.5078125,
+          "threads": 10
+        },
+        "setup_seconds": 0.314,
+        "server_connected": {
+          "cpu_seconds": 0.59,
+          "rss_mib": 15.6328125,
+          "threads": 10
+        },
+        "server_fd_count": 524,
+        "seconds": 20.622,
+        "operations": 240,
+        "operations_per_second": 11.64,
+        "deliveries": 15120,
+        "deliveries_per_second": 733.2,
+        "duplicates": 0,
+        "latency": {
+          "response": {
+            "p50_ms": 311.749,
+            "p95_ms": 567.783,
+            "p99_ms": 625.42,
+            "max_ms": 665.523
+          },
+          "delivery": {
+            "p50_ms": 312.122,
+            "p95_ms": 569.919,
+            "p99_ms": 626.96,
+            "max_ms": 667.972
+          },
+          "acknowledged": {
+            "p50_ms": 673.922,
+            "p95_ms": 833.713,
+            "p99_ms": 951.532,
+            "max_ms": 1080.67
+          }
+        },
+        "resources": {
+          "server": {
+            "cpu_percent": 37.87,
+            "rss_peak_mib": 16.26,
+            "rss_start_mib": 16.26,
+            "rss_end_mib": 16.26,
+            "threads_peak": 10
+          },
+          "generator": {
+            "cpu_percent": 11.49,
+            "rss_peak_mib": 35.34,
+            "rss_start_mib": 35.34,
+            "rss_end_mib": 35.34,
+            "threads_peak": 1
+          },
+          "mysql": {
+            "cpu_percent": 85.49,
+            "rss_peak_mib": 550.15,
+            "rss_start_mib": 550.15,
+            "rss_end_mib": 550.15,
+            "threads_peak": 46
+          }
+        },
+        "mysql_status_delta": {
+          "Com_commit": 240,
+          "Com_stmt_execute": 30960,
+          "Innodb_log_waits": 0,
+          "Innodb_os_log_fsyncs": 15114,
+          "Innodb_row_lock_time": 216,
+          "Innodb_row_lock_waits": 62
+        },
+        "persisted_messages": 285,
+        "persisted_deliveries": 17955,
+        "unacknowledged": 0,
+        "errors": [],
+        "server_warnings_errors": {}
+      }
+    ]
+  },
+  "post_load_functional_validation": [
+    "PASS SIGTERM: authentication, chat, groups, files, ACKs, retries, permissions, reconnect, and restart recovery",
+    "PASS SIGKILL: authentication, chat, groups, files, ACKs, retries, permissions, reconnect, and restart recovery"
+  ]
+}
